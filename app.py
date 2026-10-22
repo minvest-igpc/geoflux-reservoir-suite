@@ -14,11 +14,9 @@ def filter_seismic_noise(
     time_window_days: float = 7.0
 ) -> pd.DataFrame:
     """Filters out mine-induced background noise from microseismic data logs."""
-    # Guard rail against missing or incompatible column logs
     required_cols = ['Easting_m', 'Northing_m', 'Depth_m', 'timestamp']
     for col in required_cols:
         if col not in seismic_df.columns:
-            # Fallback if timestamps or proper spatial coordinates aren't provided yet
             if col == 'timestamp':
                 seismic_df['timestamp'] = pd.Timestamp.now()
             else:
@@ -75,7 +73,6 @@ class ReservoirGeomechanicsEngine:
             
         # 1. Stimulated Reservoir Volume (SRV) calculation via 3D Convex Hull Enveloping
         base_hull_vol = ConvexHull(coords).volume
-        # Reservoir Upscaling Matrix: Scales micro-seismic clusters to structural reservoirs
         self.srv_volume = float(base_hull_vol * 12.5)
         
         # 2. Fracture Flow Pathway Evaluation via Source Mechanism Inversion
@@ -142,7 +139,7 @@ st.sidebar.subheader("Subsurface Envelope")
 srv_slider = st.sidebar.slider("Microseismic Event Count Index", min_value=50, max_value=1000, value=300, step=50)
 noise_factor = st.sidebar.slider("Rock Mass Anisotropy (Noise)", min_value=5, max_value=60, value=25, step=5)
 
-# NEW: Spatiotemporal Multi-Stream Filter Controls Added Here
+# --- Spatiotemporal Multi-Stream Filter Controls ---
 st.sidebar.markdown("---")
 st.sidebar.subheader("⚡ Mine Seismology Noise Clean-off")
 enable_filter = st.sidebar.checkbox("Activate Spatiotemporal Buffer", value=True)
@@ -160,6 +157,8 @@ uploaded_file = st.sidebar.file_uploader("Upload Mine Seismology Text Log (.csv/
 opex_limit = st.sidebar.slider("Economic Operating Limit (BOE / Day)", min_value=5.0, max_value=120.0, value=25.0, step=5.0)
 
 # 2. RUN REAL-TIME DATA COMPILATION ROUTINES
+raw_df = None
+
 if uploaded_file is not None:
     try:
         raw_df = pd.read_csv(uploaded_file)
@@ -170,17 +169,15 @@ if uploaded_file is not None:
         if 'Time' in raw_df.columns: raw_df.rename(columns={'Time': 'timestamp'}, inplace=True)
     except Exception as e:
         st.sidebar.error(f"❌ File Parsing Error: {e}")
-        uploaded_file = None
+        raw_df = None
 
-if uploaded_file is None:
+if raw_df is None:
     np.random.seed(42)
     mechanisms = np.random.choice(
         ['Shear', 'Tensile', 'Closure'], 
         size=srv_slider, 
         p=[1.0 - (tensile_ratio/100.0) - 0.05, tensile_ratio/100.0, 0.05]
     )
-    
-    # Generate timestamp arrays for mock dataset pipelines
     base_dates = pd.date_range(end=pd.Timestamp.now(), periods=srv_slider, freq='h')
     
     raw_df = pd.DataFrame({
@@ -197,7 +194,6 @@ if uploaded_file is None:
 # DYNAMICALLY FILTER INPUT STREAMS BEFORE RUNNING PHYSICS CORE
 # =====================================================================
 if enable_filter:
-    # Synthesize a temporary matching mine layout log matrix to cross-examine data
     mock_mine_geometry = pd.DataFrame({
         'mine_zone_id': ['Zone_A_Longwall', 'Zone_B_Pillar'],
         'x': [490.0, 520.0],
@@ -210,3 +206,11 @@ if enable_filter:
     raw_df = filter_seismic_noise(raw_df, mock_mine_geometry, max_dist_meters=buffer_dist, time_window_days=buffer_time)
     filtered_out = initial_count - len(raw_df)
     if filtered_out > 0:
+        st.sidebar.warning(f"⚡ Isolated {filtered_out} structural mine-noise events from logs.")
+
+# Fire calculations dynamically across the newly synchronized platform
+engine = ReservoirGeomechanicsEngine(raw_df)
+srv, fcd = engine.parse_and_scale_geomechanics()
+menu_metrics = engine.forecast_eur(economic_limit=opex_limit)
+
+# 3. THE RESTAURANT MENU VIEW (Top Analytics Output Display Metrics Row)
