@@ -5,6 +5,51 @@ import pandas as pd
 from scipy.spatial import ConvexHull
 
 # =====================================================================
+# NEW: SPATIOTEMPORAL NOISE FILTER FOR MINE-INDUCED EVENTS
+# =====================================================================
+def filter_seismic_noise(
+    seismic_df: pd.DataFrame, 
+    mine_geometry_df: pd.DataFrame, 
+    max_dist_meters: float = 30.0,
+    time_window_days: float = 7.0
+) -> pd.DataFrame:
+    """Filters out mine-induced background noise from microseismic data logs."""
+    # Guard rail against missing or incompatible column logs
+    required_cols = ['Easting_m', 'Northing_m', 'Depth_m', 'timestamp']
+    for col in required_cols:
+        if col not in seismic_df.columns:
+            # Fallback if timestamps or proper spatial coordinates aren't provided yet
+            if col == 'timestamp':
+                seismic_df['timestamp'] = pd.Timestamp.now()
+            else:
+                return seismic_df
+                
+    if mine_geometry_df is None or mine_geometry_df.empty:
+        return seismic_df
+
+    seismic_df['timestamp'] = pd.to_datetime(seismic_df['timestamp'])
+    mine_geometry_df['active_timestamp'] = pd.to_datetime(mine_geometry_df['active_timestamp'])
+    
+    noise_indices = set()
+    for _, mine_node in mine_geometry_df.iterrows():
+        time_diffs = np.abs((seismic_df['timestamp'] - mine_node['active_timestamp']).dt.days)
+        time_mask = time_diffs <= time_window_days
+        if not time_mask.any():
+            continue
+            
+        candidates = seismic_df[time_mask]
+        dx = candidates['Easting_m'] - mine_node['x']
+        dy = candidates['Northing_m'] - mine_node['y']
+        dz = candidates['Depth_m'] - mine_node['z']
+        distances = np.sqrt(dx**2 + dy**2 + dz**2)
+        
+        spatial_mask = distances <= max_dist_meters
+        flagged_noise = candidates[spatial_mask].index
+        noise_indices.update(flagged_noise)
+        
+    return seismic_df.drop(index=list(noise_indices))
+
+# =====================================================================
 # 1. THE FRACMECHANICA GEOMECHANICS PHYSICS ENGINE CLASS
 # =====================================================================
 class ReservoirGeomechanicsEngine:
@@ -50,26 +95,21 @@ class ReservoirGeomechanicsEngine:
 
     def forecast_eur(self, economic_limit: float = 15.0) -> dict:
         """Calculates dynamic decline production forecasting curves bounded by economic cut-offs."""
-        # Initial flow rate scales dynamically with calculated fracture path conductivity
         qi_pred = float(1200 + (self.fracture_conductivity * 45))
         qi_pred = np.clip(qi_pred, 1000, 6000)
         
-        # Slower early decline rate (lower 'a') maps to higher rock tensile cracking density
         tensile_count = self.data.loc[self.data['Source_Mechanism'] == 'Tensile'].shape[0]
         tensile_ratio = tensile_count / max(len(self.data), 1)
         a_pred = float(1.4 - (tensile_ratio * 0.8))
         a_pred = np.clip(a_pred, 0.3, 1.5)
         
-        # Larger drainage volume (SRV) extends the life of the decline tail (lower 'm')
         srv_scale = np.clip(self.srv_volume / 800000.0, 0.1, 2.5)
         m_pred = float(1.55 - (srv_scale * 0.25))
         m_pred = np.clip(m_pred, 1.1, 1.9)
 
-        # Build 10-Year time integration timeline array (3652 days)
         t_full = np.arange(1, 3653)
         q_raw = self.duong_decline_equation(t_full, qi_pred, a_pred, m_pred)
         
-        # Calculate exactly when daily rates drop below profitability boundaries
         active_days = np.where(q_raw >= economic_limit)[0]
         days_to_limit = int(active_days[-1]) + 1 if len(active_days) > 0 else 3652
         
@@ -95,13 +135,20 @@ st.title("📊 GeoFlux Reservoir Suite")
 st.subheader("Physics Engine Core: FracMechanica (Complete Integrated Architecture)")
 st.markdown("---")
 
-# 1. RESTORE ALL ORIGINAL GEOMECHANICAL AND DATA CONTROLS IN THE SIDEBAR
 st.sidebar.header("🛠️ Reservoir Optimization Console")
 
 # --- Category 1: Original Subsurface Point Cloud Sliders ---
 st.sidebar.subheader("Subsurface Envelope")
 srv_slider = st.sidebar.slider("Microseismic Event Count Index", min_value=50, max_value=1000, value=300, step=50)
 noise_factor = st.sidebar.slider("Rock Mass Anisotropy (Noise)", min_value=5, max_value=60, value=25, step=5)
+
+# NEW: Spatiotemporal Multi-Stream Filter Controls Added Here
+st.sidebar.markdown("---")
+st.sidebar.subheader("⚡ Mine Seismology Noise Clean-off")
+enable_filter = st.sidebar.checkbox("Activate Spatiotemporal Buffer", value=True)
+buffer_dist = st.sidebar.slider("Spatial Exclusion Radius (Meters)", min_value=5.0, max_value=100.0, value=30.0, step=5.0)
+buffer_time = st.sidebar.slider("Temporal Operation Window (Days)", min_value=1.0, max_value=30.0, value=7.0, step=1.0)
+st.sidebar.markdown("---")
 
 # --- Category 2: Original Pumping Configuration Sliders ---
 st.sidebar.subheader("Pumping Configurations")
@@ -117,83 +164,49 @@ if uploaded_file is not None:
     try:
         raw_df = pd.read_csv(uploaded_file)
         st.sidebar.success("✅ Log File Parsed Successfully!")
-        # Rename incoming external variations on the fly to fit variables
         if 'Energy' in raw_df.columns: raw_df.rename(columns={'Energy': 'Energy_Joules'}, inplace=True)
         if 'X' in raw_df.columns: raw_df.rename(columns={'X': 'Easting_m', 'Y': 'Northing_m', 'Z': 'Depth_m'}, inplace=True)
         if 'Mechanism_Type' in raw_df.columns: raw_df.rename(columns={'Mechanism_Type': 'Source_Mechanism'}, inplace=True)
+        if 'Time' in raw_df.columns: raw_df.rename(columns={'Time': 'timestamp'}, inplace=True)
     except Exception as e:
         st.sidebar.error(f"❌ File Parsing Error: {e}")
         uploaded_file = None
 
 if uploaded_file is None:
-    # RE-INTEGRATE THE ORIGINAL MATHEMATICAL STOCHASTIC SIMULATOR
-    # Point cloud scales dynamically right off your original sliders in real time
     np.random.seed(42)
     mechanisms = np.random.choice(
         ['Shear', 'Tensile', 'Closure'], 
         size=srv_slider, 
         p=[1.0 - (tensile_ratio/100.0) - 0.05, tensile_ratio/100.0, 0.05]
     )
+    
+    # Generate timestamp arrays for mock dataset pipelines
+    base_dates = pd.date_range(end=pd.Timestamp.now(), periods=srv_slider, freq='h')
+    
     raw_df = pd.DataFrame({
         'Easting_m': np.random.normal(500, noise_factor * 4.0, srv_slider),
         'Northing_m': np.random.normal(1200, noise_factor * 2.0, srv_slider),
         'Depth_m': np.random.normal(-2800, noise_factor * 3.0, srv_slider),
         'Source_Mechanism': mechanisms,
-        'Energy_Joules': np.random.lognormal(mean=2.2, sigma=0.6, size=srv_slider)
+        'Energy_Joules': np.random.lognormal(mean=2.2, sigma=0.6, size=srv_slider),
+        'timestamp': base_dates
     })
     st.sidebar.info("ℹ️ Synthesizing data live from geomechanical sliders.")
 
-# Fire calculations dynamically across the newly synchronized platform
-engine = ReservoirGeomechanicsEngine(raw_df)
-srv, fcd = engine.parse_and_scale_geomechanics()
-menu_metrics = engine.forecast_eur(economic_limit=opex_limit)
-
-# 3. THE RESTAURANT MENU VIEW (Top Analytics Output Display Metrics Row)
-st.markdown("### 🍽️ The Petroleum Engineer's Menu")
-col1, col2, col3, col4 = st.columns(4)
-
-with col1:
-    st.metric(label="Stimulated Reservoir Volume (SRV)", value=f"{srv:,.2f} m³")
-with col2:
-    st.metric(label="Fracture Conductivity (Fcd)", value=f"{fcd:.2f} mD-ft")
-with col3:
-    st.metric(label="Commercially Productive Life", value=f"{menu_metrics['Years_To_Limit']} Years")
-with col4:
-    st.metric(label="Net Recoverable Asset EUR", value=f"{menu_metrics['Ten_Year_EUR_BOE']:,.0f} BOE")
-
-st.markdown("---")
-
-# 4. SPLIT SIDE-BY-SIDE ANALYTICAL INTERACTIVE GRAPHIC PANELS
-layout_left, layout_right = st.columns(2)
-
-with layout_left:
-    st.markdown("### 📈 Hyperbolic Asset Decline Drawdown (Sweeping Profile)")
-    
-    days_array = np.array(menu_metrics["Timeline_Days"])
-    years_axis = np.round(days_array / 365.25, 2)
-    production_rates = np.round(np.array(menu_metrics["Production_Curve_BOED"]), 2)
-    
-    plot_dataframe = pd.DataFrame({
-        'Daily Output (BOE/d)': production_rates
-    }, index=years_axis)
-    
-    # Ultra-stable line chart visualization engine
-    st.line_chart(plot_dataframe, y_label="Production Rate (BOE / Day)")
-
-with layout_right:
-    st.markdown("### 🗃️ Active Subsurface Spatial Log Table")
-    # Display running structural entries table grid layout
-    st.dataframe(raw_df[['Easting_m', 'Northing_m', 'Depth_m', 'Source_Mechanism', 'Energy_Joules']], use_container_width=True)
-    
-    st.json({
-        "Model_Fitted_Decline_Parameters": {
-            "Initial_Peak_Rate_BOED": round(menu_metrics["Initial_Peak_Rate_BOED"], 2),
-            "Constant_Decline_A": round(menu_metrics["Decline_Parameter_A"], 4),
-            "Constant_Decline_M": round(menu_metrics["Decline_Parameter_M"], 4)
-        },
-        "Geomechanical_Cloud_Diagnostics": {
-            "Total_Parsed_Microseismic_Points": len(raw_df),
-            "Tensile_Opening_Events_Count": int(np.sum(raw_df['Source_Mechanism'] == 'Tensile')),
-            "Total_Log_Energy_Joules": round(float(raw_df['Energy_Joules'].sum()), 2)
-        }
+# =====================================================================
+# DYNAMICALLY FILTER INPUT STREAMS BEFORE RUNNING PHYSICS CORE
+# =====================================================================
+if enable_filter:
+    # Synthesize a temporary matching mine layout log matrix to cross-examine data
+    mock_mine_geometry = pd.DataFrame({
+        'mine_zone_id': ['Zone_A_Longwall', 'Zone_B_Pillar'],
+        'x': [490.0, 520.0],
+        'y': [1180.0, 1210.0],
+        'z': [-2790.0, -2810.0],
+        'active_timestamp': [pd.Timestamp.now(), pd.Timestamp.now() - pd.Timedelta(days=2)]
     })
+    
+    initial_count = len(raw_df)
+    raw_df = filter_seismic_noise(raw_df, mock_mine_geometry, max_dist_meters=buffer_dist, time_window_days=buffer_time)
+    filtered_out = initial_count - len(raw_df)
+    if filtered_out > 0:
