@@ -95,6 +95,7 @@ class ReservoirGeomechanicsEngine:
         qi_pred = float(1200 + (self.fracture_conductivity * 45))
         qi_pred = np.clip(qi_pred, 1000, 6000)
         
+        # FIXED: Added [0] index to shape to return integer row count
         tensile_count = self.data.loc[self.data['Source_Mechanism'] == 'Tensile'].shape[0]
         tensile_ratio = tensile_count / max(len(self.data), 1)
         a_pred = float(1.4 - (tensile_ratio * 0.8))
@@ -213,4 +214,3 @@ engine = ReservoirGeomechanicsEngine(raw_df)
 srv, fcd = engine.parse_and_scale_geomechanics()
 menu_metrics = engine.forecast_eur(economic_limit=opex_limit)
 
-# 3. THE RESTAURANT MENU VIEW (Top Analytics Output Display Metrics Row)
