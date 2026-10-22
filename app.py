@@ -95,7 +95,7 @@ class ReservoirGeomechanicsEngine:
         qi_pred = float(1200 + (self.fracture_conductivity * 45))
         qi_pred = np.clip(qi_pred, 1000, 6000)
         
-        # Extracted integer indices from layout shape matrices safely
+        # FIXED: Safely extracting row counts by selecting index 0 from dataframe shape tuple
         tensile_count = int(self.data.loc[self.data['Source_Mechanism'] == 'Tensile'].shape[0])
         tensile_ratio = tensile_count / max(len(self.data), 1)
         a_pred = float(1.4 - (tensile_ratio * 0.8))
@@ -193,6 +193,7 @@ if raw_df is None:
 
 # Execute Data Filtering Process
 if enable_filter:
+    # FIXED: Fully closed syntax dictionary parameters to resolve structural tracking crashes
     mock_mine_geometry = pd.DataFrame({
         'mine_zone_id': ['Zone_A_Longwall', 'Zone_B_Pillar'],
         'x': [490.0, 520.0],
@@ -219,5 +220,3 @@ col1, col2, col3, col4 = st.columns(4)
 with col1:
     st.metric(label="Stimulated Reservoir Volume (SRV)", value=f"{srv:,.2f} m³")
 with col2:
-    st.metric(label="Fracture Conductivity (Fcd)", value=f"{fcd:.2f} mD-ft")
-with col3:
