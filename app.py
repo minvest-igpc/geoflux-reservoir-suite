@@ -98,7 +98,6 @@ class ReservoirGeomechanicsEngine:
         qi_pred = np.clip(qi_pred, 1000, 6000)
         
         # Slower early decline rate (lower 'a') maps to higher rock tensile cracking density
-        # FIXED: Added [0] index to resolve the calculation crash inside the dynamic engine lifecycle
         tensile_count = self.data.loc[self.data['Source_Mechanism'] == 'Tensile'].shape[0]
         tensile_ratio = tensile_count / max(len(self.data), 1)
         a_pred = float(1.4 - (tensile_ratio * 0.8))
@@ -203,3 +202,6 @@ if uploaded_file is None:
 # NEW ADDITION: RUN THE SPATIOTEMPORAL DATA FILTER STAGE
 # =====================================================================
 if enable_filter:
+    mock_mine_geometry = pd.DataFrame({
+        'mine_zone_id': ['Zone_A_Longwall', 'Zone_B_Pillar'],
+        'x': [490.0, 520.0],
