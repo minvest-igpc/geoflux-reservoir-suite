@@ -5,7 +5,7 @@ import pandas as pd
 from scipy.spatial import ConvexHull
 
 # =====================================================================
-# NEW: SPATIOTEMPORAL NOISE FILTER FOR MINE-INDUCED EVENTS
+# NEW INTEGRATED FUNCTION: SPATIOTEMPORAL NOISE FILTER FOR MINE-INDUCED EVENTS
 # =====================================================================
 def filter_seismic_noise(
     seismic_df: pd.DataFrame, 
@@ -48,7 +48,7 @@ def filter_seismic_noise(
     return seismic_df.drop(index=list(noise_indices))
 
 # =====================================================================
-# 1. THE FRACMECHANICA GEOMECHANICS PHYSICS ENGINE CLASS
+# 1. THE FRACMECHANICA GEOMECHANICS PHYSICS ENGINE CLASS (ORIGINAL MINT)
 # =====================================================================
 class ReservoirGeomechanicsEngine:
     """
@@ -95,7 +95,6 @@ class ReservoirGeomechanicsEngine:
         qi_pred = float(1200 + (self.fracture_conductivity * 45))
         qi_pred = np.clip(qi_pred, 1000, 6000)
         
-        # FIXED: Added [0] index to shape to return integer row count
         tensile_count = self.data.loc[self.data['Source_Mechanism'] == 'Tensile'].shape[0]
         tensile_ratio = tensile_count / max(len(self.data), 1)
         a_pred = float(1.4 - (tensile_ratio * 0.8))
@@ -140,7 +139,7 @@ st.sidebar.subheader("Subsurface Envelope")
 srv_slider = st.sidebar.slider("Microseismic Event Count Index", min_value=50, max_value=1000, value=300, step=50)
 noise_factor = st.sidebar.slider("Rock Mass Anisotropy (Noise)", min_value=5, max_value=60, value=25, step=5)
 
-# --- Spatiotemporal Multi-Stream Filter Controls ---
+# NEW ADDITION: Spatiotemporal Multi-Stream Filter Control Block (Non-Destructive Sidebar Inversion)
 st.sidebar.markdown("---")
 st.sidebar.subheader("⚡ Mine Seismology Noise Clean-off")
 enable_filter = st.sidebar.checkbox("Activate Spatiotemporal Buffer", value=True)
@@ -152,7 +151,7 @@ st.sidebar.markdown("---")
 st.sidebar.subheader("Pumping Configurations")
 tensile_ratio = st.sidebar.slider("Focal Mechanism Tensile Ratio (%)", min_value=5, max_value=95, value=35, step=5)
 
-# --- Category 3: New Data Logs & OPEX Financial Blocks ---
+# --- Category 3: Original Inbound Files & Economics Blocks ---
 st.sidebar.subheader("📂 Inbound Files & Economics")
 uploaded_file = st.sidebar.file_uploader("Upload Mine Seismology Text Log (.csv/.txt)", type=["csv", "txt"])
 opex_limit = st.sidebar.slider("Economic Operating Limit (BOE / Day)", min_value=5.0, max_value=120.0, value=25.0, step=5.0)
@@ -192,7 +191,7 @@ if raw_df is None:
     st.sidebar.info("ℹ️ Synthesizing data live from geomechanical sliders.")
 
 # =====================================================================
-# DYNAMICALLY FILTER INPUT STREAMS BEFORE RUNNING PHYSICS CORE
+# INTERCEPT AND FILTER STRATA DATA STREAMS BEFORE CORE COALESCENCE
 # =====================================================================
 if enable_filter:
     mock_mine_geometry = pd.DataFrame({
