@@ -71,12 +71,11 @@ class ReservoirGeomechanicsEngine:
         if len(coords) < 4:
             return 0.0, 0.0
             
-        # 1. Stimulated Reservoir Volume (SRV) calculation via 3D Convex Hull Enveloping
+        # Stimulated Reservoir Volume (SRV) calculation via 3D Convex Hull Enveloping
         base_hull_vol = ConvexHull(coords).volume
-        # Reservoir Upscaling Matrix: Scales micro-seismic clusters to structural reservoirs
         self.srv_volume = float(base_hull_vol * 12.5)
         
-        # 2. Fracture Flow Pathway Evaluation via Source Mechanism Inversion
+        # Fracture Flow Pathway Evaluation via Source Mechanism Inversion
         tensile_energy = self.data.loc[self.data['Source_Mechanism'] == 'Tensile', 'Energy_Joules'].sum()
         total_energy = self.data['Energy_Joules'].sum()
         
@@ -93,27 +92,22 @@ class ReservoirGeomechanicsEngine:
 
     def forecast_eur(self, economic_limit: float = 15.0) -> dict:
         """Calculates dynamic decline production forecasting curves bounded by economic cut-offs."""
-        # Initial flow rate scales dynamically with calculated fracture path conductivity
         qi_pred = float(1200 + (self.fracture_conductivity * 45))
         qi_pred = np.clip(qi_pred, 1000, 6000)
         
-        # Slower early decline rate (lower 'a') maps to higher rock tensile cracking density
-        # FIXED: Corrected shape attribute call from function to raw tuple index lookup [0]
+        # FIXED: Extract structural integer row counts correctly via [0] index accessor
         tensile_count = int(self.data.loc[self.data['Source_Mechanism'] == 'Tensile'].shape[0])
         tensile_ratio = tensile_count / max(len(self.data), 1)
         a_pred = float(1.4 - (tensile_ratio * 0.8))
         a_pred = np.clip(a_pred, 0.3, 1.5)
         
-        # Larger drainage volume (SRV) extends the life of the decline tail (lower 'm')
         srv_scale = np.clip(self.srv_volume / 800000.0, 0.1, 2.5)
         m_pred = float(1.55 - (srv_scale * 0.25))
         m_pred = np.clip(m_pred, 1.1, 1.9)
 
-        # Build 10-Year time integration timeline array (3652 days)
         t_full = np.arange(1, 3653)
         q_raw = self.duong_decline_equation(t_full, qi_pred, a_pred, m_pred)
         
-        # Calculate exactly when daily rates drop below profitability boundaries
         active_days = np.where(q_raw >= economic_limit)[0]
         days_to_limit = int(active_days[-1]) + 1 if len(active_days) > 0 else 3652
         
@@ -139,15 +133,14 @@ st.title("📊 GeoFlux Reservoir Suite")
 st.subheader("Physics Engine Core: FracMechanica (Complete Integrated Architecture)")
 st.markdown("---")
 
-# 1. RESTORE ALL ORIGINAL GEOMECHANICAL AND DATA CONTROLS IN THE SIDEBAR
 st.sidebar.header("🛠️ Reservoir Optimization Console")
 
-# --- Category 1: Original Subsurface Point Cloud Sliders ---
+# Subsurface Envelope Sliders
 st.sidebar.subheader("Subsurface Envelope")
 srv_slider = st.sidebar.slider("Microseismic Event Count Index", min_value=50, max_value=1000, value=300, step=50)
 noise_factor = st.sidebar.slider("Rock Mass Anisotropy (Noise)", min_value=5, max_value=60, value=25, step=5)
 
-# --- Spatiotemporal Multi-Stream Filter Controls ---
+# Spatiotemporal Multi-Stream Filter Controls
 st.sidebar.markdown("---")
 st.sidebar.subheader("⚡ Mine Seismology Noise Clean-off")
 enable_filter = st.sidebar.checkbox("Activate Spatiotemporal Buffer", value=True)
@@ -155,23 +148,22 @@ buffer_dist = st.sidebar.slider("Spatial Exclusion Radius (Meters)", min_value=5
 buffer_time = st.sidebar.slider("Temporal Operation Window (Days)", min_value=1.0, max_value=30.0, value=7.0, step=1.0)
 st.sidebar.markdown("---")
 
-# --- Category 2: Original Pumping Configuration Sliders ---
+# Pumping Configuration Sliders
 st.sidebar.subheader("Pumping Configurations")
 tensile_ratio = st.sidebar.slider("Focal Mechanism Tensile Ratio (%)", min_value=5, max_value=95, value=35, step=5)
 
-# --- Category 3: New Data Logs & OPEX Financial Blocks ---
+# Inbound Files & Economics Blocks
 st.sidebar.subheader("📂 Inbound Files & Economics")
 uploaded_file = st.sidebar.file_uploader("Upload Mine Seismology Text Log (.csv/.txt)", type=["csv", "txt"])
 opex_limit = st.sidebar.slider("Economic Operating Limit (BOE / Day)", min_value=5.0, max_value=120.0, value=25.0, step=5.0)
 
-# 2. RUN REAL-TIME DATA COMPILATION ROUTINES
+# Real-Time Data Compilation Pipeline
 raw_df = None
 
 if uploaded_file is not None:
     try:
         raw_df = pd.read_csv(uploaded_file)
         st.sidebar.success("✅ Log File Parsed Successfully!")
-        # Rename incoming external variations on the fly to fit variables
         if 'Energy' in raw_df.columns: raw_df.rename(columns={'Energy': 'Energy_Joules'}, inplace=True)
         if 'X' in raw_df.columns: raw_df.rename(columns={'X': 'Easting_m', 'Y': 'Northing_m', 'Z': 'Depth_m'}, inplace=True)
         if 'Mechanism_Type' in raw_df.columns: raw_df.rename(columns={'Mechanism_Type': 'Source_Mechanism'}, inplace=True)
@@ -181,7 +173,6 @@ if uploaded_file is not None:
         raw_df = None
 
 if raw_df is None:
-    # RE-INTEGRATE THE ORIGINAL MATHEMATICAL STOCHASTIC SIMULATOR
     np.random.seed(42)
     mechanisms = np.random.choice(
         ['Shear', 'Tensile', 'Closure'], 
@@ -200,10 +191,32 @@ if raw_df is None:
     })
     st.sidebar.info("ℹ️ Synthesizing data live from geomechanical sliders.")
 
-# =====================================================================
-# RUN THE SPATIOTEMPORAL DATA FILTER STAGE
-# =====================================================================
+# Execute Data Filtering Process
 if enable_filter:
     mock_mine_geometry = pd.DataFrame({
         'mine_zone_id': ['Zone_A_Longwall', 'Zone_B_Pillar'],
         'x': [490.0, 520.0],
+        'y': [1180.0, 1210.0],
+        'z': [-2790.0, -2810.0],
+        'active_timestamp': [pd.Timestamp.now(), pd.Timestamp.now() - pd.Timedelta(days=2)]
+    })
+    
+    initial_count = len(raw_df)
+    raw_df = filter_seismic_noise(raw_df, mock_mine_geometry, max_dist_meters=buffer_dist, time_window_days=buffer_time)
+    filtered_out = initial_count - len(raw_df)
+    if filtered_out > 0:
+        st.sidebar.warning(f"⚡ Isolated {filtered_out} structural mine-noise events from logs.")
+
+# Compute System Metrics via Geomechanics Physics Core
+engine = ReservoirGeomechanicsEngine(raw_df)
+srv, fcd = engine.parse_and_scale_geomechanics()
+menu_metrics = engine.forecast_eur(economic_limit=opex_limit)
+
+# Metrics Grid Section
+st.markdown("### 🍽️ The Petroleum Engineer's Menu")
+col1, col2, col3, col4 = st.columns(4)
+
+with col1:
+    st.metric(label="Stimulated Reservoir Volume (SRV)", value=f"{srv:,.2f} m³")
+with col2:
+    st.metric(label="Fracture Conductivity (Fcd)", value=f"{fcd:.2f} mD-ft")
