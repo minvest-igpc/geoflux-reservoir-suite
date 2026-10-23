@@ -1,4 +1,4 @@
-# geoflux/app.py - Ultimate Unified Subsurface Diagnostics Suite with Explicit Audit
+# geoflux/app.py - Ultimate 5-Chart Unified Subsurface Diagnostics Suite with Explicit Audit
 import streamlit as st
 import numpy as np
 import pandas as pd
@@ -112,7 +112,7 @@ curves = engine.generate_forecasts(geo["fcd"], geo["srv"], opex_limit, tensile_r
 st.markdown("### 🍽️ The Petroleum Engineer's Menu")
 m1, m2, m3, m4, m5 = st.columns(5)
 m1.metric("SRV Volume", f"{geo['srv']:,.2f} m³")
-m2.metric("Conductivity (Fcd)", f"{geo['fcd']:.2f} mD-ft")
+m2.metric("Fracture Conductivity (Fcd)", f"{geo['fcd']:.2f} mD-ft")
 m3.metric("b-Value Index", f"{geo['b_value']:.2f}")
 m4.metric("Productive Life", f"{curves['life']} Years")
 m5.metric("Asset EUR", f"{curves['eur']:,.0f} BOE")
@@ -143,16 +143,16 @@ with v1:
     counts_raw, _ = np.histogram(m_raw, bins=bins)
     counts_clean, _ = np.histogram(m_clean, bins=bins)
     
-    log_raw = np.log10(np.maximum(np.cumsum(counts_raw[::-1])[::-1], 1))
-    log_clean = np.log10(np.maximum(np.cumsum(counts_clean[::-1])[::-1], 1))
+    log_raw = np.nan_to_num(np.log10(np.maximum(np.cumsum(counts_raw[::-1])[::-1], 1)))
+    log_clean = np.nan_to_num(np.log10(np.maximum(np.cumsum(counts_clean[::-1])[::-1], 1)))
     
     error_margin = noise / 120.0
     
     scrutiny_df = pd.DataFrame({
-        'Unfiltered Core Data Logs': log_raw,
-        'Filtered Sanity Dataset': log_clean,
-        'Margin of Error (Upper Bound)': log_clean + error_margin,
-        'Margin of Error (Lower Bound)': np.maximum(log_clean - error_margin, 0)
+        'Unfiltered Core Data Logs': np.round(log_raw, 4),
+        'Filtered Sanity Dataset': np.round(log_clean, 4),
+        'Margin of Error (Upper Bound)': np.round(log_clean + error_margin, 4),
+        'Margin of Error (Lower Bound)': np.round(np.maximum(log_clean - error_margin, 0), 4)
     }, index=np.round(bins[:-1], 2))
     st.line_chart(scrutiny_df)
 
@@ -170,12 +170,9 @@ with v3:
     st.markdown("#### 🧪 Point 4: Proppant Placement Efficiency Envelope")
     distance_axis = np.linspace(0, 300, 100)
     concentration_curve = (proppant_eff * 0.1) * np.exp(-distance_axis / (100 + geo["fcd"]))
-    prop_df = pd.DataFrame({"Proppant Concentration (lb/ft²)": concentration_curve}, index=distance_axis)
+    prop_df = pd.DataFrame({"Proppant Concentration (lb/ft²)": np.round(concentration_curve, 4)}, index=distance_axis)
     st.area_chart(prop_df)
 
 st.markdown("---")
 
 # TARGET RE-ARCHITECTED INTERACTIVE AUDIT TRAIL ROW
-st.markdown("### 🛠️ Interactive Verification Channel: Point 1 & Point 2 Scrutiny")
-audit_col1, audit_col2 = st.columns(2)
-
