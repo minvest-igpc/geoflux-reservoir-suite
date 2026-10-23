@@ -1,4 +1,4 @@
-# geoflux/app.py - Ultimate 5-Chart Unified Subsurface Diagnostics Suite with Explicit Audit
+# geoflux/app.py - Advanced Multi-Depth Subsurface Evaluation Suite with Seismology Scrutiny
 import streamlit as st
 import numpy as np
 import pandas as pd
@@ -58,9 +58,11 @@ class SubsurfaceAnalyticsEngine:
         w_scale = 0.35 if "Deep" in self.regime else (0.50 if "Ultra-Deep" in self.regime else 0.75)
         q_water = (t ** w_scale) * (q_fluid * 0.04)
         
-        # PERMANENT TUPLE EXTRACTION FIX: Added [0] to extract the array out of the tuple natively
-        active_days = np.where(q_fluid >= opex)[0]
-        cutoff = int(active_days[-1]) + 1 if len(active_days) > 0 else 3652
+        active_days = np.where(q_fluid >= opex)
+        if len(active_days[0]) > 0:
+            cutoff = int(active_days[0][-1]) + 1
+        else:
+            cutoff = 3652
         
         return {"timeline": (t / 365.25).tolist(), "oil_rate": q_fluid.tolist(), "water_rate": q_water.tolist(), "eur": float(np.sum(q_fluid[:cutoff])), "life": round(cutoff / 365.25, 2)}
 
@@ -164,10 +166,10 @@ with v1:
     st.line_chart(scrutiny_df)
 
 with v2:
-    st.markdown("#### 🎯 Point 3: Tectonic Horizontal Stress Tensor Profile")
-    stress_timeline = np.linspace(0, 10, 50)
-    stress_chart_df = pd.DataFrame({
-        "Vertical Stress (Sv)": [stress["Sv"]] * 50,
-        "Max Vector Azimuth (SHmax)": [stress["Shmax"]] * 50,
-        "Min Vector Azimuth (Shmin)": [stress["Shmin"]] * 50
-    }, index=stress_timeline)
+    st.markdown("#### 🎯 Point 3: 3D Horizontal Stress Tensor Vector Field")
+    # INTERACTIVE UPGRADE OVERLAY: Re-designed from static parameters to an active geometric vector matrix block
+    angle = np.linspace(0, 2 * np.pi, 100)
+    shmin_vec = stress["Shmin"] * np.cos(angle)
+    shmax_vec = stress["Shmax"] * np.sin(angle)
+    vector_df = pd.DataFrame({
+        "Minimum Vector Trend (Shmin)": shmin_vec,
