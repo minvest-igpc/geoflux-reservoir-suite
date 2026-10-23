@@ -1,4 +1,4 @@
-# geoflux/app.py - Standalone Unified Subsurface Suite (Fresh Start)
+# geoflux/app.py - Standalone Unified Subsurface Suite (Complete Module 1, 2, 3 Build)
 import streamlit as st
 import numpy as np
 import pandas as pd
@@ -21,32 +21,26 @@ class SubsurfaceAnalyticsEngine:
         total_e = self.data['Energy_J'].sum()
         fcd = float((tensile_e / total_e if total_e > 0 else 0.2) * 65.0)
         
+        # Calculate real localized magnitude scales from microseismic energy proxy
         magnitudes = 0.67 * np.log10(np.maximum(self.data['Energy_J'].values, 1e-3)) - 1.2
         b_val = float(1.0 / (np.mean(magnitudes) - np.min(magnitudes))) if len(magnitudes) > 0 else 1.0
         if "Ultra-Deep" in self.regime: b_val *= 0.85
         
-        return {"srv": srv, "fcd": fcd, "b_value": np.clip(b_val, 0.45, 1.95)}
+        return {"srv": srv, "fcd": fcd, "b_value": np.clip(b_val, 0.45, 1.95), "magnitudes": magnitudes}
 
     def generate_forecasts(self, fcd: float, srv: float, opex: float, tensile_ratio_input: float, noise_input: float) -> dict:
-        # 1. Flow Peak scales cleanly off fracture pathway parameters
         qi = np.clip(float(1000 + (fcd * 55)), 800, 6500)
         t = np.arange(1, 3653)
         
-        # 2. Early Decline Intercept binds to Tensile Opening ratios (Higher Tensile = Lower Early Decline)
         di_factor = np.clip(float(0.45 - (tensile_ratio_input / 300.0)), 0.05, 0.40)
-        
-        # 3. Long-term curvature exponent binds to Volumetric scale properties and Rock Mass Noise variance
         curvature_n = np.clip(float(0.40 + (srv / 2000000.0) + (noise_input / 200.0)), 0.15, 0.95)
         
-        # CORE ARPS RE-DRAFT: The decay curve now explicitly responds to geomechanical parameters
         q_fluid = qi / (1.0 + di_factor * t) ** curvature_n
-        
-        # Water dynamic influx scale binds dynamically to your depth controls
         w_scale = 0.35 if "Deep" in self.regime else (0.50 if "Ultra-Deep" in self.regime else 0.75)
         q_water = (t ** w_scale) * (q_fluid * 0.04)
         
         active_days = np.where(q_fluid >= opex)
-        cutoff = int(active_days[0][-1]) + 1 if len(active_days[0]) > 0 else 3652
+        cutoff = int(active_days[-1]) + 1 if len(active_days) > 0 else 3652
         
         return {
             "timeline": (t / 365.25).tolist(),
@@ -59,7 +53,7 @@ class SubsurfaceAnalyticsEngine:
 # 2. INTERACTIVE USER INTERFACE LAYER
 st.set_page_config(page_title="GeoFlux Reservoir Suite", layout="wide", page_icon="📊")
 st.title("📊 GeoFlux Reservoir Suite")
-st.subheader("Physics Engine Core: FracMechanica (Fresh Production Build)")
+st.subheader("Physics Engine Core: FracMechanica (Complete Architecture Upgrade)")
 st.markdown("---")
 
 st.sidebar.header("🛠️ Reservoir Optimization Console")
@@ -92,8 +86,6 @@ st.sidebar.info("ℹ️ Synthesizing data live from geomechanical sliders.")
 
 engine = SubsurfaceAnalyticsEngine(raw_df, depth_regime=env)
 geo = engine.process_geomechanics()
-
-# Pass slider configurations right into the decay forecast math matrix function loop parameters
 curves = engine.generate_forecasts(geo["fcd"], geo["srv"], opex_limit, tensile_ratio_input=tensile_pct, noise_input=noise)
 
 st.markdown("### 🍽️ The Petroleum Engineer's Menu")
@@ -105,8 +97,9 @@ m4.metric("Commercially Productive Life", f"{curves['life']} Years")
 m5.metric("Net Recoverable Asset EUR", f"{curves['eur']:,.0f} BOE")
 st.markdown("---")
 
-st.markdown("### 📊 Reservoir Production Performance Forecasts")
-chart_col1, chart_col2 = st.columns(2)
+# MODULE 1 DYNAMIC CHART ADD-ON: 3-Column Visualization Grid Split
+st.markdown("### 📊 Complete Geomechanical & Fluids Analytics Dashboard")
+chart_col1, chart_col2, chart_col3 = st.columns(3)
 
 with chart_col1:
     st.markdown("#### 📈 Hydrocarbon Decline Profile")
@@ -114,9 +107,24 @@ with chart_col1:
     st.area_chart(oil_df)
 
 with chart_col2:
-    st.markdown("#### 💧 Produced Water Cut Curve")
+    st.markdown("#### 💧 Produced Water Cut Curve (WOR)")
     water_df = pd.DataFrame({'Produced Water Loading (BWPD)': curves["water_rate"]}, index=np.round(curves["timeline"], 2))
     st.area_chart(water_df)
+
+with chart_col3:
+    st.markdown("#### ⚡ Module 1: Gutenberg-Richter Frequency Plot")
+    # Dynamically generate cumulative log event distributions based on magnitudes
+    m_data = geo["magnitudes"]
+    bins = np.linspace(np.min(m_data), np.max(m_data), 15)
+    counts, bin_edges = np.histogram(m_data, bins=bins)
+    cum_counts = np.cumsum(counts[::-1])[::-1]
+    log_counts = np.log10(np.maximum(cum_counts, 1))
+    
+    gr_df = pd.DataFrame({
+        'Log10 Cumulative Events (Log N)': log_counts
+    }, index=np.round(bin_edges[:-1], 2))
+    # Stable line graph canvas to illustrate tectonic slopes / fault slips safely
+    st.line_chart(gr_df, y_label="Log10 Cumulative Events (Log N)")
 
 st.markdown("---")
 l_col, r_col = st.columns(2)
