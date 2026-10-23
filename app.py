@@ -1,4 +1,4 @@
-# geoflux/app.py - Ultimate 5-Chart Unified Subsurface Diagnostics Suite with Explicit Audit
+# geoflux/app.py - Ultimate Unified Subsurface Diagnostics Suite with Explicit Audit
 import streamlit as st
 import numpy as np
 import pandas as pd
@@ -60,8 +60,8 @@ class SubsurfaceAnalyticsEngine:
         
         active_days = np.where(q_fluid >= opex)
         
-        if len(active_days) > 0:
-            cutoff = int(active_days[-1]) + 1
+        if len(active_days) > 0 and len(active_days[0]) > 0:
+            cutoff = int(active_days[0][-1]) + 1
         else:
             cutoff = 3652
         
@@ -179,4 +179,3 @@ st.markdown("---")
 st.markdown("### 🛠️ Interactive Verification Channel: Point 1 & Point 2 Scrutiny")
 audit_col1, audit_col2 = st.columns(2)
 
-with audit_col1:
