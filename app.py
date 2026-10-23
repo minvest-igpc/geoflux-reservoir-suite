@@ -59,7 +59,13 @@ class SubsurfaceAnalyticsEngine:
         q_water = (t ** w_scale) * (q_fluid * 0.04)
         
         active_days = np.where(q_fluid >= opex)
-        cutoff = int(active_days[-1]) + 1 if len(active_days) > 0 else 3652
+        
+        # PERMANENT MATHEMATICAL TUPLE SCALAR FIX: Target index [0][-1] to unwrap the numpy sequence cleanly
+        if len(active_days) > 0 and len(active_days[0]) > 0:
+            cutoff = int(active_days[0][-1]) + 1
+        else:
+            cutoff = 3652
+        
         return {"timeline": (t / 365.25).tolist(), "oil_rate": q_fluid.tolist(), "water_rate": q_water.tolist(), "eur": float(np.sum(q_fluid[:cutoff])), "life": round(cutoff / 365.25, 2)}
 
 # =====================================================================
@@ -131,7 +137,6 @@ v1, v2, v3 = st.columns(3)
 
 with v1:
     st.markdown("#### ⚡ Point 1 & 2: Gutenberg-Richter Filtering & Margin of Error Envelope")
-    # Generate unfiltered magnitude sets for comparison
     m_raw = 0.67 * np.log10(np.maximum(raw_df['Energy_J'].values, 1e-3)) - 1.2
     m_clean = geo["magnitudes"]
     
@@ -142,7 +147,6 @@ with v1:
     log_raw = np.log10(np.maximum(np.cumsum(counts_raw[::-1])[::-1], 1))
     log_clean = np.log10(np.maximum(np.cumsum(counts_clean[::-1])[::-1], 1))
     
-    # Calculate margin of error (Standard Deviation) based on rock mass anisotropy noise
     error_margin = noise / 120.0
     
     scrutiny_df = pd.DataFrame({
@@ -151,8 +155,6 @@ with v1:
         'Margin of Error (Upper Bound)': log_clean + error_margin,
         'Margin of Error (Lower Bound)': np.maximum(log_clean - error_margin, 0)
     }, index=np.round(bins[:-1], 2))
-    
-    # Plots the comparison lines alongside the calculated margin of error bounds simultaneously
     st.line_chart(scrutiny_df)
 
 with v2:
@@ -173,3 +175,5 @@ with v3:
     st.area_chart(prop_df)
 
 st.markdown("---")
+l_col, r_col = st.columns(2)
+with l_col:
