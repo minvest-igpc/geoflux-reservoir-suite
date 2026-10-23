@@ -59,7 +59,10 @@ class SubsurfaceAnalyticsEngine:
         q_water = (t ** w_scale) * (q_fluid * 0.04)
         
         active_days = np.where(q_fluid >= opex)
-        cutoff = int(active_days[-1]) + 1 if len(active_days) > 0 else 3652
+        
+        # PERMANENT TUPLE UNWRAPPING FIX: Changed from active_days[-1] to active_days[0][-1]
+        cutoff = int(active_days[0][-1]) + 1 if len(active_days[0]) > 0 else 3652
+        
         return {"timeline": (t / 365.25).tolist(), "oil_rate": q_fluid.tolist(), "water_rate": q_water.tolist(), "eur": float(np.sum(q_fluid[:cutoff])), "life": round(cutoff / 365.25, 2)}
 
 # =====================================================================
@@ -107,7 +110,7 @@ curves = engine.generate_forecasts(geo["fcd"], geo["srv"], opex_limit, tensile_r
 st.markdown("### 🍽️ The Petroleum Engineer's Menu")
 m1, m2, m3, m4, m5 = st.columns(5)
 m1.metric("SRV Volume", f"{geo['srv']:,.2f} m³")
-m2.metric("Conductivity (Fcd)", f"{geo['fcd']:.2f} mD-ft")
+m2.metric("Fracture Conductivity (Fcd)", f"{geo['fcd']:.2f} mD-ft")
 m3.metric("b-Value Index", f"{geo['b_value']:.2f}")
 m4.metric("Productive Life", f"{curves['life']} Years")
 m5.metric("Asset EUR", f"{curves['eur']:,.0f} BOE")
@@ -137,7 +140,6 @@ v1, v2 = st.columns(2)
 
 with v1:
     st.markdown("#### 🎯 Point 3: Tectonic Stress Tensor Gradient Profile")
-    # Dynamically draw stress anisotropy trends to prove structural calculation credibility
     stress_timeline = np.linspace(0, 10, 50)
     stress_chart_df = pd.DataFrame({
         "Vertical Stress (Sv)": [stress["Sv"]] * 50,
@@ -148,7 +150,6 @@ with v1:
 
 with v2:
     st.markdown("#### 🧪 Point 4: Proppant Placement Efficiency Envelope")
-    # Draw an explicit concentration profile to prove how fast fractures pinch shut under pressure
     distance_axis = np.linspace(0, 300, 100)
     concentration_curve = (proppant_eff * 0.1) * np.exp(-distance_axis / (100 + geo["fcd"]))
     prop_df = pd.DataFrame({"Proppant Concentration (lb/ft²)": concentration_curve}, index=distance_axis)
