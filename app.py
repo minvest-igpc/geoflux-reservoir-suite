@@ -1,4 +1,4 @@
-# geoflux/app.py - Standalone Unified Subsurface Suite (Complete Module 1, 2, 3 Build)
+# geoflux/app.py - Standalone Multi-Depth Unified Reservoir Evaluation Suite (Fixed Array Slicing)
 import streamlit as st
 import numpy as np
 import pandas as pd
@@ -39,7 +39,8 @@ class SubsurfaceAnalyticsEngine:
         w_scale = 0.35 if "Deep" in self.regime else (0.50 if "Ultra-Deep" in self.regime else 0.75)
         q_water = (t ** w_scale) * (q_fluid * 0.04)
         
-        active_days = np.where(q_fluid >= opex)
+        # CRITICAL MATHEMATICAL FLAT ARRAY FIX: Added [0] to cleanly isolate the indexing scalar
+        active_days = np.where(q_fluid >= opex)[0]
         cutoff = int(active_days[-1]) + 1 if len(active_days) > 0 else 3652
         
         return {
@@ -97,7 +98,7 @@ m4.metric("Commercially Productive Life", f"{curves['life']} Years")
 m5.metric("Net Recoverable Asset EUR", f"{curves['eur']:,.0f} BOE")
 st.markdown("---")
 
-# MODULE 1 DYNAMIC CHART ADD-ON: 3-Column Visualization Grid Split
+# 3-Column Visualization Grid Layout
 st.markdown("### 📊 Complete Geomechanical & Fluids Analytics Dashboard")
 chart_col1, chart_col2, chart_col3 = st.columns(3)
 
@@ -113,7 +114,6 @@ with chart_col2:
 
 with chart_col3:
     st.markdown("#### ⚡ Module 1: Gutenberg-Richter Frequency Plot")
-    # Dynamically generate cumulative log event distributions based on magnitudes
     m_data = geo["magnitudes"]
     bins = np.linspace(np.min(m_data), np.max(m_data), 15)
     counts, bin_edges = np.histogram(m_data, bins=bins)
@@ -123,7 +123,6 @@ with chart_col3:
     gr_df = pd.DataFrame({
         'Log10 Cumulative Events (Log N)': log_counts
     }, index=np.round(bin_edges[:-1], 2))
-    # Stable line graph canvas to illustrate tectonic slopes / fault slips safely
     st.line_chart(gr_df, y_label="Log10 Cumulative Events (Log N)")
 
 st.markdown("---")
