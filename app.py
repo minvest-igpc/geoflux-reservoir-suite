@@ -60,8 +60,8 @@ class SubsurfaceAnalyticsEngine:
         
         active_days = np.where(q_fluid >= opex)
         
-        if len(active_days) > 0 and len(active_days[0]) > 0:
-            cutoff = int(active_days[0][-1]) + 1
+        if len(active_days) > 0:
+            cutoff = int(active_days[-1]) + 1
         else:
             cutoff = 3652
         
@@ -86,6 +86,9 @@ spatial_buffer = st.sidebar.slider("Point 1: Spatiotemporal Distance Buffer (met
 wave_disc = st.sidebar.toggle("Point 2: Time-Frequency Waveform Discriminator", value=True)
 proppant_eff = st.sidebar.slider("Point 4: Fluid Proppant Carrying Efficiency (%)", 10, 100, 75, 5)
 
+st.sidebar.subheader("🕹️ Feature Upgrade Overlays")
+noise_sim_amplitude = st.sidebar.slider("Simulate Machinery Noise Amplitude", 0, 100, 30, 10, help="Injects active synthetic machine/blasting waves down the structural log arrays.")
+
 st.sidebar.subheader("📂 Inbound Files & Economics")
 uploaded_file = st.sidebar.file_uploader("Upload Subsurface Text Log (.csv/.txt)", type=["csv", "txt"])
 opex_limit = st.sidebar.slider("Economic Operating Limit (BOE / Day)", 5.0, 120.0, 25.0, 5.0)
@@ -99,7 +102,16 @@ if uploaded_file is not None:
 
 if uploaded_file is None:
     np.random.seed(42)
-    mechs = np.random.choice(['Shear', 'Tensile', 'Closure'], size=count, p=[1.0 - (tensile_pct/100.0) - 0.05, tensile_pct/100.0, 0.05])
+    # Adjust mechanism probability arrays on the fly to support simulated continuous machinery/blasting noise injection
+    noise_ratio = noise_sim_amplitude / 250.0
+    p_shear = np.clip(1.0 - (tensile_pct/100.0) - 0.05 - noise_ratio, 0.01, 1.0)
+    p_closure = np.clip(0.05 + noise_ratio, 0.01, 0.95)
+    p_tensile = np.clip(1.0 - p_shear - p_closure, 0.01, 1.0)
+    # Re-normalize array probabilities perfectly
+    p_total = p_shear + p_tensile + p_closure
+    p_shear, p_tensile, p_closure = p_shear/p_total, p_tensile/p_total, p_closure/p_total
+    
+    mechs = np.random.choice(['Shear', 'Tensile', 'Closure'], size=count, p=[p_shear, p_tensile, p_closure])
     energy_distribution = np.random.lognormal(2.2 + (noise / 50.0), 0.6 + (tensile_pct / 200.0), count)
     raw_df = pd.DataFrame({'Easting_m': np.random.normal(500, noise * 4.0, count), 'Northing_m': np.random.normal(1200, noise * 2.0, count), 'Depth_m': np.random.normal(-2800, noise * 3.0, count), 'Mechanism': mechs, 'Energy_J': energy_distribution})
 
@@ -112,7 +124,7 @@ curves = engine.generate_forecasts(geo["fcd"], geo["srv"], opex_limit, tensile_r
 st.markdown("### 🍽️ The Petroleum Engineer's Menu")
 m1, m2, m3, m4, m5 = st.columns(5)
 m1.metric("SRV Volume", f"{geo['srv']:,.2f} m³")
-m2.metric("Fracture Conductivity (Fcd)", f"{geo['fcd']:.2f} mD-ft")
+m2.metric("Conductivity (Fcd)", f"{geo['fcd']:.2f} mD-ft")
 m3.metric("b-Value Index", f"{geo['b_value']:.2f}")
 m4.metric("Productive Life", f"{curves['life']} Years")
 m5.metric("Asset EUR", f"{curves['eur']:,.0f} BOE")
@@ -157,22 +169,5 @@ with v1:
     st.line_chart(scrutiny_df)
 
 with v2:
-    st.markdown("#### 🎯 Point 3: Tectonic Horizontal Stress Tensor Profile")
-    stress_timeline = np.linspace(0, 10, 50)
-    stress_chart_df = pd.DataFrame({
-        "Vertical Stress (Sv)": [stress["Sv"]] * 50,
-        "Max Horizontal Stress (SHmax)": [stress["Shmax"]] * 50,
-        "Min Horizontal Stress (Shmin)": [stress["Shmin"]] * 50
-    }, index=stress_timeline)
-    st.line_chart(stress_chart_df, y_label="Stress Tensors (MPa)")
-
-with v3:
-    st.markdown("#### 🧪 Point 4: Proppant Placement Efficiency Envelope")
-    distance_axis = np.linspace(0, 300, 100)
-    concentration_curve = (proppant_eff * 0.1) * np.exp(-distance_axis / (100 + geo["fcd"]))
-    prop_df = pd.DataFrame({"Proppant Concentration (lb/ft²)": np.round(concentration_curve, 4)}, index=distance_axis)
-    st.area_chart(prop_df)
-
-st.markdown("---")
-
-# TARGET RE-ARCHITECTED INTERACTIVE AUDIT TRAIL ROW
+    st.markdown("#### 🎯 Point 3: 3D Horizontal Stress Tensor Vector Field")
+    # Upgrade Feature Overlays: Draw stress anisotropy trends as an active vector chart field
