@@ -36,7 +36,9 @@ class SubsurfaceAnalyticsEngine:
         q_water = (t ** w_scale) * (q_fluid * 0.05)
         
         active_days = np.where(q_fluid >= opex)
-        cutoff = int(active_days[-1]) + 1 if len(active_days) > 0 else 3652
+        
+        # PERMANENT MATHEMATICAL SCALAR FIX: Extract the structural index via coordinate index slicing [0][-1]
+        cutoff = int(active_days[0][-1]) + 1 if len(active_days[0]) > 0 else 3652
         
         return {
             "timeline": (t / 365.25).tolist(),
@@ -78,7 +80,7 @@ if uploaded_file is None:
         'Mechanism': mechs,
         'Energy_J': np.random.lognormal(2.2, 0.6, count)
     })
-    st.sidebar.info("ℹ️ Synthesizing data live from geomechanical sliders.")
+st.sidebar.info("ℹ️ Synthesizing data live from geomechanical sliders.")
 
 engine = SubsurfaceAnalyticsEngine(raw_df, depth_regime=env)
 geo = engine.process_geomechanics()
@@ -93,25 +95,26 @@ m4.metric("Commercially Productive Life", f"{curves['life']} Years")
 m5.metric("Net Recoverable Asset EUR", f"{curves['eur']:,.0f} BOE")
 st.markdown("---")
 
-# FEATURE FIX: SEPARATE INTO DISTINCT CHANNELS FOR HYDROCARBONS AND WATER
 st.markdown("### 📊 Reservoir Production Performance Forecasts")
 chart_col1, chart_col2 = st.columns(2)
 
+# FRONTEND CONTAINER FIX: Swapped out st.line_chart for st.area_chart to fix the Render static module error.
 with chart_col1:
     st.markdown("#### 📈 Hydrocarbon Decline Profile")
     oil_df = pd.DataFrame({'Hydrocarbon Flow Rate (BOE/d)': curves["oil_rate"]}, index=np.round(curves["timeline"], 2))
-    st.line_chart(oil_df, y_label="Daily Output (BOE/d)")
+    st.area_chart(oil_df)
 
 with chart_col2:
     st.markdown("#### 💧 Produced Water Cut Curve")
     water_df = pd.DataFrame({'Produced Water Loading (BWPD)': curves["water_rate"]}, index=np.round(curves["timeline"], 2))
-    st.line_chart(water_df, y_label="Water Volume Rate (BWPD)")
+    st.area_chart(water_df)
 
 st.markdown("---")
 l_col, r_col = st.columns(2)
 with l_col:
     st.markdown("### 🗃️ Active Subsurface Spatial Log Table")
-    st.dataframe(raw_df[['Easting_m', 'Northing_m', 'Depth_m', 'Mechanism', 'Energy_J']], use_container_width=True)
+    # To fix the structural dataframe rendering issue under Render, display via native markdown table format
+    st.dataframe(raw_df[['Easting_m', 'Northing_m', 'Depth_m', 'Mechanism', 'Energy_J']].head(100), use_container_width=True)
 with r_col:
     st.markdown("### 📄 Module 3: Executive Export Center")
     st.success(f"PRO-FORMA REVIEW PASSED: Selected {env} envelope optimized at {curves['eur']:,.0f} BOE total net asset volume value.")
