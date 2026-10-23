@@ -1,4 +1,4 @@
-# geoflux/app.py - Advanced Multi-Depth Subsurface Evaluation Suite with Seismology Scrutiny
+# geoflux/app.py - Ultimate 5-Chart Unified Subsurface Diagnostics Suite with Explicit Audit
 import streamlit as st
 import numpy as np
 import pandas as pd
@@ -60,7 +60,7 @@ class SubsurfaceAnalyticsEngine:
         
         active_days = np.where(q_fluid >= opex)
         
-        if len(active_days) > 0 and len(active_days[0]) > 0:
+        if len(active_days[0]) > 0:
             cutoff = int(active_days[0][-1]) + 1
         else:
             cutoff = 3652
@@ -112,7 +112,7 @@ curves = engine.generate_forecasts(geo["fcd"], geo["srv"], opex_limit, tensile_r
 st.markdown("### 🍽️ The Petroleum Engineer's Menu")
 m1, m2, m3, m4, m5 = st.columns(5)
 m1.metric("SRV Volume", f"{geo['srv']:,.2f} m³")
-m2.metric("Fracture Conductivity (Fcd)", f"{geo['fcd']:.2f} mD-ft")
+m2.metric("Conductivity (Fcd)", f"{geo['fcd']:.2f} mD-ft")
 m3.metric("b-Value Index", f"{geo['b_value']:.2f}")
 m4.metric("Productive Life", f"{curves['life']} Years")
 m5.metric("Asset EUR", f"{curves['eur']:,.0f} BOE")
@@ -174,6 +174,9 @@ with v3:
     st.area_chart(prop_df)
 
 st.markdown("---")
-l_col, r_col = st.columns(2)
-with l_col:
-    st.markdown("### 🗃️ Audit Trail: Applied Data Pipeline Filters")
+
+# TARGET RE-ARCHITECTED INTERACTIVE AUDIT TRAIL ROW
+st.markdown("### 🛠️ Interactive Verification Channel: Point 1 & Point 2 Scrutiny")
+audit_col1, audit_col2 = st.columns(2)
+
+with audit_col1:
