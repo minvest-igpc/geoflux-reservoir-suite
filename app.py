@@ -47,8 +47,11 @@ class SubsurfaceAnalyticsEngine:
         q_fluid = qi / (1.0 + di_factor * t) ** curvature_n
         w_scale = 0.35 if "Deep" in self.regime else (0.50 if "Ultra-Deep" in self.regime else 0.75)
         q_water = (t ** w_scale) * (q_fluid * 0.04)
+        
+        # PERMANENT TUPLE EXPANSION FIX: Drill down to index [0] to extract the array scalar cleanly
         active_days = np.where(q_fluid >= opex)
-        cutoff = int(active_days[-1]) + 1 if len(active_days) > 0 else 3652
+        cutoff = int(active_days[0][-1]) + 1 if len(active_days[0]) > 0 else 3652
+        
         return {"timeline": (t / 365.25).tolist(), "oil_rate": q_fluid.tolist(), "water_rate": q_water.tolist(), "eur": float(np.sum(q_fluid[:cutoff])), "life": round(cutoff / 365.25, 2)}
 
 st.set_page_config(page_title="GeoFlux Reservoir Suite", layout="wide", page_icon="📊")
