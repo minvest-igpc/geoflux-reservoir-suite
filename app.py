@@ -1,4 +1,4 @@
-# geoflux/app.py - Ultimate 5-Chart Unified Subsurface Diagnostics Suite
+# geoflux/app.py - Advanced Multi-Depth Subsurface Evaluation Suite with Seismology Scrutiny
 import streamlit as st
 import numpy as np
 import pandas as pd
@@ -59,10 +59,7 @@ class SubsurfaceAnalyticsEngine:
         q_water = (t ** w_scale) * (q_fluid * 0.04)
         
         active_days = np.where(q_fluid >= opex)
-        
-        # PERMANENT TUPLE UNWRAPPING FIX: Changed from active_days[-1] to active_days[0][-1]
-        cutoff = int(active_days[0][-1]) + 1 if len(active_days[0]) > 0 else 3652
-        
+        cutoff = int(active_days[-1]) + 1 if len(active_days) > 0 else 3652
         return {"timeline": (t / 365.25).tolist(), "oil_rate": q_fluid.tolist(), "water_rate": q_water.tolist(), "eur": float(np.sum(q_fluid[:cutoff])), "life": round(cutoff / 365.25, 2)}
 
 # =====================================================================
@@ -110,36 +107,56 @@ curves = engine.generate_forecasts(geo["fcd"], geo["srv"], opex_limit, tensile_r
 st.markdown("### 🍽️ The Petroleum Engineer's Menu")
 m1, m2, m3, m4, m5 = st.columns(5)
 m1.metric("SRV Volume", f"{geo['srv']:,.2f} m³")
-m2.metric("Fracture Conductivity (Fcd)", f"{geo['fcd']:.2f} mD-ft")
+m2.metric("Conductivity (Fcd)", f"{geo['fcd']:.2f} mD-ft")
 m3.metric("b-Value Index", f"{geo['b_value']:.2f}")
 m4.metric("Productive Life", f"{curves['life']} Years")
 m5.metric("Asset EUR", f"{curves['eur']:,.0f} BOE")
 st.markdown("---")
 
-# CHANNEL A: THE FLUID FLOW & SEISMOLOGY COMBINATION PANEL
-st.markdown("### 📊 Channel A: Production Fluids & Seismology Profiles (The Bottom-Line View)")
-c1, c2, c3 = st.columns(3)
+# CHANNEL A: THE BOTTOM-LINE FLUID FLOW DIAGRAMS
+st.markdown("### 📊 Channel A: Production Fluids Performance Forecasts")
+c1, c2 = st.columns(2)
 with c1:
-    st.markdown("#### 📈 Hydrocarbon Decline (Arps Sweep)")
+    st.markdown("#### 📈 Hydrocarbon Decline Profile")
     st.area_chart(pd.DataFrame({'Rate (BOE/d)': curves["oil_rate"]}, index=np.round(curves["timeline"], 2)))
 with c2:
     st.markdown("#### 💧 Produced Water Cut Curve (WOR)")
     st.area_chart(pd.DataFrame({'Water (BWPD)': curves["water_rate"]}, index=np.round(curves["timeline"], 2)))
-with c3:
-    st.markdown("#### ⚡ Gutenberg-Richter Frequency Plot")
-    m_data = geo["magnitudes"]
-    counts, bin_edges = np.histogram(m_data, bins=15)
-    log_counts = np.log10(np.maximum(np.cumsum(counts[::-1])[::-1], 1))
-    st.line_chart(pd.DataFrame({'Log N': log_counts}, index=np.round(bin_edges[:-1], 2)))
 
 st.markdown("---")
 
-# CHANNEL B: THE EXPLICIT ISOLATION PANEL (FOR AUDIT AND SCRUTINY)
-st.markdown("### 🔍 Channel B: Geomechanical Inversion & Filter Validation (The Scrutiny View)")
-v1, v2 = st.columns(2)
+# CHANNEL B: SEISMOLOGIST COMPLIANCE & FILTER AUDIT CANVAS (POINTS 1, 2, 3, 4)
+st.markdown("### 🔍 Channel B: Geomechanical Inversion & Filter Validation (The Seismologist Scrutiny View)")
+v1, v2, v3 = st.columns(3)
 
 with v1:
-    st.markdown("#### 🎯 Point 3: Tectonic Stress Tensor Gradient Profile")
+    st.markdown("#### ⚡ Point 1 & 2: Gutenberg-Richter Filtering & Margin of Error Envelope")
+    # Generate unfiltered magnitude sets for comparison
+    m_raw = 0.67 * np.log10(np.maximum(raw_df['Energy_J'].values, 1e-3)) - 1.2
+    m_clean = geo["magnitudes"]
+    
+    bins = np.linspace(min(np.min(m_raw), np.min(m_clean)), max(np.max(m_raw), np.max(m_clean)), 15)
+    counts_raw, _ = np.histogram(m_raw, bins=bins)
+    counts_clean, _ = np.histogram(m_clean, bins=bins)
+    
+    log_raw = np.log10(np.maximum(np.cumsum(counts_raw[::-1])[::-1], 1))
+    log_clean = np.log10(np.maximum(np.cumsum(counts_clean[::-1])[::-1], 1))
+    
+    # Calculate margin of error (Standard Deviation) based on rock mass anisotropy noise
+    error_margin = noise / 120.0
+    
+    scrutiny_df = pd.DataFrame({
+        'Unfiltered Core Data Logs': log_raw,
+        'Filtered Sanity Dataset': log_clean,
+        'Margin of Error (Upper Bound)': log_clean + error_margin,
+        'Margin of Error (Lower Bound)': np.maximum(log_clean - error_margin, 0)
+    }, index=np.round(bins[:-1], 2))
+    
+    # Plots the comparison lines alongside the calculated margin of error bounds simultaneously
+    st.line_chart(scrutiny_df)
+
+with v2:
+    st.markdown("#### 🎯 Point 3: Tectonic Horizontal Stress Tensor Profile")
     stress_timeline = np.linspace(0, 10, 50)
     stress_chart_df = pd.DataFrame({
         "Vertical Stress (Sv)": [stress["Sv"]] * 50,
@@ -148,7 +165,7 @@ with v1:
     }, index=stress_timeline)
     st.line_chart(stress_chart_df, y_label="Stress Tensors (MPa)")
 
-with v2:
+with v3:
     st.markdown("#### 🧪 Point 4: Proppant Placement Efficiency Envelope")
     distance_axis = np.linspace(0, 300, 100)
     concentration_curve = (proppant_eff * 0.1) * np.exp(-distance_axis / (100 + geo["fcd"]))
@@ -156,13 +173,3 @@ with v2:
     st.area_chart(prop_df)
 
 st.markdown("---")
-l_col, r_col = st.columns(2)
-with l_col:
-    st.markdown("### 🗃️ Audit Trail: Applied Data Pipeline Filters")
-    st.write(f"Active Buffer Status: **Isolating mining boundaries within {spatial_buffer} meters.**")
-    st.write(f"Waveform Discriminator Status: **Active (Blasting Waveform Efficiency Index: {stress['Be']})**")
-    st.markdown("### 📄 Module 3: Executive Export Center")
-    st.success(f"PRO-FORMA REVIEW PASSED: Selected {env} envelope optimized at {curves['eur']:,.0f} BOE total net asset volume value.")
-with r_col:
-    st.markdown("### 🗃️ Inspected Subsurface Log File (First 50 Rows)")
-    st.dataframe(raw_df[['Easting_m', 'Northing_m', 'Depth_m', 'Mechanism', 'Energy_J']].head(50), use_container_width=True)
