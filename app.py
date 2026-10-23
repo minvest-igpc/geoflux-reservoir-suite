@@ -60,8 +60,8 @@ class SubsurfaceAnalyticsEngine:
         
         active_days = np.where(q_fluid >= opex)
         
-        if len(active_days[0]) > 0:
-            cutoff = int(active_days[0][-1]) + 1
+        if len(active_days) > 0:
+            cutoff = int(active_days[-1]) + 1
         else:
             cutoff = 3652
         
