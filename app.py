@@ -58,12 +58,9 @@ class SubsurfaceAnalyticsEngine:
         w_scale = 0.35 if "Deep" in self.regime else (0.50 if "Ultra-Deep" in self.regime else 0.75)
         q_water = (t ** w_scale) * (q_fluid * 0.04)
         
-        active_days = np.where(q_fluid >= opex)
-        
-        if len(active_days) > 0:
-            cutoff = int(active_days[-1]) + 1
-        else:
-            cutoff = 3652
+        # PERMANENT TUPLE EXTRACTION FIX: Added [0] to extract the array out of the tuple natively
+        active_days = np.where(q_fluid >= opex)[0]
+        cutoff = int(active_days[-1]) + 1 if len(active_days) > 0 else 3652
         
         return {"timeline": (t / 365.25).tolist(), "oil_rate": q_fluid.tolist(), "water_rate": q_water.tolist(), "eur": float(np.sum(q_fluid[:cutoff])), "life": round(cutoff / 365.25, 2)}
 
@@ -87,7 +84,7 @@ wave_disc = st.sidebar.toggle("Point 2: Time-Frequency Waveform Discriminator", 
 proppant_eff = st.sidebar.slider("Point 4: Fluid Proppant Carrying Efficiency (%)", 10, 100, 75, 5)
 
 st.sidebar.subheader("🕹️ Feature Upgrade Overlays")
-noise_sim_amplitude = st.sidebar.slider("Simulate Machinery Noise Amplitude", 0, 100, 30, 10, help="Injects active synthetic machine/blasting waves down the structural log arrays.")
+noise_sim_amplitude = st.sidebar.slider("Simulate Machinery Noise Amplitude", 0, 100, 30, 10)
 
 st.sidebar.subheader("📂 Inbound Files & Economics")
 uploaded_file = st.sidebar.file_uploader("Upload Subsurface Text Log (.csv/.txt)", type=["csv", "txt"])
@@ -102,12 +99,10 @@ if uploaded_file is not None:
 
 if uploaded_file is None:
     np.random.seed(42)
-    # Adjust mechanism probability arrays on the fly to support simulated continuous machinery/blasting noise injection
     noise_ratio = noise_sim_amplitude / 250.0
     p_shear = np.clip(1.0 - (tensile_pct/100.0) - 0.05 - noise_ratio, 0.01, 1.0)
     p_closure = np.clip(0.05 + noise_ratio, 0.01, 0.95)
     p_tensile = np.clip(1.0 - p_shear - p_closure, 0.01, 1.0)
-    # Re-normalize array probabilities perfectly
     p_total = p_shear + p_tensile + p_closure
     p_shear, p_tensile, p_closure = p_shear/p_total, p_tensile/p_total, p_closure/p_total
     
@@ -169,5 +164,10 @@ with v1:
     st.line_chart(scrutiny_df)
 
 with v2:
-    st.markdown("#### 🎯 Point 3: 3D Horizontal Stress Tensor Vector Field")
-    # Upgrade Feature Overlays: Draw stress anisotropy trends as an active vector chart field
+    st.markdown("#### 🎯 Point 3: Tectonic Horizontal Stress Tensor Profile")
+    stress_timeline = np.linspace(0, 10, 50)
+    stress_chart_df = pd.DataFrame({
+        "Vertical Stress (Sv)": [stress["Sv"]] * 50,
+        "Max Vector Azimuth (SHmax)": [stress["Shmax"]] * 50,
+        "Min Vector Azimuth (Shmin)": [stress["Shmin"]] * 50
+    }, index=stress_timeline)
