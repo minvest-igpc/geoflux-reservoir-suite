@@ -27,17 +27,25 @@ class SubsurfaceAnalyticsEngine:
         
         return {"srv": srv, "fcd": fcd, "b_value": np.clip(b_val, 0.45, 1.95)}
 
-    def generate_forecasts(self, fcd: float, srv: float, opex: float) -> dict:
-        qi = np.clip(float(1200 + (fcd * 45)), 1000, 6000)
+    def generate_forecasts(self, fcd: float, srv: float, opex: float, tensile_ratio_input: float, noise_input: float) -> dict:
+        # 1. Flow Peak scales cleanly off fracture pathway parameters
+        qi = np.clip(float(1000 + (fcd * 55)), 800, 6500)
         t = np.arange(1, 3653)
-        q_fluid = qi / (1.0 + 0.15 * t) ** 1.3
         
-        w_scale = 0.4 if "Deep" in self.regime else 0.8
-        q_water = (t ** w_scale) * (q_fluid * 0.05)
+        # 2. Early Decline Intercept binds to Tensile Opening ratios (Higher Tensile = Lower Early Decline)
+        di_factor = np.clip(float(0.45 - (tensile_ratio_input / 300.0)), 0.05, 0.40)
+        
+        # 3. Long-term curvature exponent binds to Volumetric scale properties and Rock Mass Noise variance
+        curvature_n = np.clip(float(0.40 + (srv / 2000000.0) + (noise_input / 200.0)), 0.15, 0.95)
+        
+        # CORE ARPS RE-DRAFT: The decay curve now explicitly responds to geomechanical parameters
+        q_fluid = qi / (1.0 + di_factor * t) ** curvature_n
+        
+        # Water dynamic influx scale binds dynamically to your depth controls
+        w_scale = 0.35 if "Deep" in self.regime else (0.50 if "Ultra-Deep" in self.regime else 0.75)
+        q_water = (t ** w_scale) * (q_fluid * 0.04)
         
         active_days = np.where(q_fluid >= opex)
-        
-        # PERMANENT MATHEMATICAL SCALAR FIX: Extract the structural index via coordinate index slicing [0][-1]
         cutoff = int(active_days[0][-1]) + 1 if len(active_days[0]) > 0 else 3652
         
         return {
@@ -84,7 +92,9 @@ st.sidebar.info("ℹ️ Synthesizing data live from geomechanical sliders.")
 
 engine = SubsurfaceAnalyticsEngine(raw_df, depth_regime=env)
 geo = engine.process_geomechanics()
-curves = engine.generate_forecasts(geo["fcd"], geo["srv"], opex_limit)
+
+# Pass slider configurations right into the decay forecast math matrix function loop parameters
+curves = engine.generate_forecasts(geo["fcd"], geo["srv"], opex_limit, tensile_ratio_input=tensile_pct, noise_input=noise)
 
 st.markdown("### 🍽️ The Petroleum Engineer's Menu")
 m1, m2, m3, m4, m5 = st.columns(5)
@@ -98,7 +108,6 @@ st.markdown("---")
 st.markdown("### 📊 Reservoir Production Performance Forecasts")
 chart_col1, chart_col2 = st.columns(2)
 
-# FRONTEND CONTAINER FIX: Swapped out st.line_chart for st.area_chart to fix the Render static module error.
 with chart_col1:
     st.markdown("#### 📈 Hydrocarbon Decline Profile")
     oil_df = pd.DataFrame({'Hydrocarbon Flow Rate (BOE/d)': curves["oil_rate"]}, index=np.round(curves["timeline"], 2))
@@ -113,7 +122,6 @@ st.markdown("---")
 l_col, r_col = st.columns(2)
 with l_col:
     st.markdown("### 🗃️ Active Subsurface Spatial Log Table")
-    # To fix the structural dataframe rendering issue under Render, display via native markdown table format
     st.dataframe(raw_df[['Easting_m', 'Northing_m', 'Depth_m', 'Mechanism', 'Energy_J']].head(100), use_container_width=True)
 with r_col:
     st.markdown("### 📄 Module 3: Executive Export Center")
