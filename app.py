@@ -1,412 +1,316 @@
-# geoflux/app.py - Subsurface microseismic analytics PROTOTYPE (Phase 0 cleanup)
+# geoflux/app.py - GeoFlux Mine Seismology Module (PROTOTYPE)
 #
-# STATUS: ILLUSTRATIVE PROTOTYPE. Outputs are not validated. Do not use for
-# safety, reserves booking, regulatory, or investment decisions.
-# See the CHANGELOG comment at the bottom of this file for what changed in Phase 0.
- 
+# Not validated. Not for safety-critical decisions. The oil & gas demo lives in
+# frac_demo.py until its module is rebuilt.
+
+import io
+
+import altair as alt
 import numpy as np
 import pandas as pd
 import streamlit as st
-from scipy.spatial import ConvexHull
- 
-st.set_page_config(page_title="GeoFlux Reservoir Suite (prototype)", layout="wide")
- 
-# --------------------------------------------------------------------------
-# Constants and configuration
-# --------------------------------------------------------------------------
-REQUIRED_COLUMNS = ["Easting_m", "Northing_m", "Depth_m", "Mechanism", "Energy_J"]
-VALID_MECHANISMS = ["Shear", "Tensile", "Closure"]
-RENAME_MAP = {
-    "Energy": "Energy_J", "Energy_Joules": "Energy_J",
-    "X": "Easting_m", "Y": "Northing_m", "Z": "Depth_m",
-    "Mechanism_Type": "Mechanism", "Source_Mechanism": "Mechanism",
-}
- 
-# Regimes are looked up by exact key, never by substring.
-# ("Ultra-Deep" contains the text "Deep", which broke the original substring checks.)
-REGIMES = {
-    "Intermediate (1,000m - 3,000m)": {"base_depth_m": 2000.0, "water_exponent": 0.75},
-    "Deep (3,000m - 4,500m)":         {"base_depth_m": 3800.0, "water_exponent": 0.35},
-    "Ultra-Deep (>4,500m)":           {"base_depth_m": 5000.0, "water_exponent": 0.50},
-}
- 
-SYNTH_MC = -2.0               # completeness magnitude of the synthetic catalogue
-HORIZON_DAYS = 3652           # 10-year forecast horizon
-# PLACEHOLDER forecast constants. These are uncalibrated and exist only so the
-# demo produces a curve. Replace with real reservoir inputs (Phase 4).
-QI_BASE, QI_PER_FCD, QI_MIN, QI_MAX = 1000.0, 55.0, 800.0, 6500.0
-FCD_PROXY_SCALE = 55.0        # PLACEHOLDER scaling of the conductivity proxy
- 
- 
-# --------------------------------------------------------------------------
-# Seismology helpers
-# --------------------------------------------------------------------------
-def energy_to_magnitude(energy_j):
-    """Gutenberg-Richter energy-magnitude relation: log10(E[J]) = 1.5*M + 4.8.
-    Assumes Energy_J is radiated seismic energy in joules."""
-    return (np.log10(np.maximum(np.asarray(energy_j, dtype=float), 1e-12)) - 4.8) / 1.5
- 
- 
-def magnitude_to_energy(m):
-    return 10.0 ** (1.5 * np.asarray(m, dtype=float) + 4.8)
- 
- 
-def estimate_b_value(magnitudes, hist_bin=0.1, mc_correction=0.2, min_events=30):
-    """Aki (1965) maximum-likelihood b-value above an estimated completeness
-    magnitude Mc.
- 
-        b = log10(e) / (mean(M) - Mc),   sigma_b = b / sqrt(N)
- 
-    Mc is estimated with the maximum-curvature method (modal histogram bin)
-    plus a conservative correction. Magnitudes are treated as continuous
-    (they are computed from energies, not rounded). Returns None when there are
-    too few events above Mc for a meaningful estimate.
-    """
-    m = np.asarray(magnitudes, dtype=float)
-    m = m[np.isfinite(m)]
-    if m.size < min_events:
-        return None
-    edges = np.arange(np.floor(m.min() / hist_bin) * hist_bin,
-                      m.max() + 2 * hist_bin, hist_bin)
-    counts, edges = np.histogram(m, bins=edges)
-    mc = float(edges[int(np.argmax(counts))] + hist_bin / 2.0 + mc_correction)
-    sel = m[m >= mc]
-    if sel.size < min_events or sel.mean() <= mc:
-        return None
-    b = float(np.log10(np.e) / (sel.mean() - mc))
-    return {"b": b, "sigma": b / np.sqrt(sel.size), "mc": mc, "n_used": int(sel.size)}
- 
- 
-# --------------------------------------------------------------------------
-# Data loading
-# --------------------------------------------------------------------------
-def load_uploaded(file):
-    """Parse and validate an uploaded catalogue.
-    Returns (dataframe or None, error message or None, list of warnings)."""
-    warnings = []
-    try:
-        df = pd.read_csv(file, sep=None, engine="python")
-    except Exception as exc:
-        return None, f"Could not read the file: {exc}", warnings
-    df = df.rename(columns={k: v for k, v in RENAME_MAP.items() if k in df.columns})
-    missing = [c for c in REQUIRED_COLUMNS if c not in df.columns]
-    if missing:
-        return None, (f"Missing required columns: {missing}. "
-                      f"Columns found: {list(df.columns)}"), warnings
-    df = df[REQUIRED_COLUMNS].copy()
-    df["Mechanism"] = df["Mechanism"].astype(str).str.strip().str.title()
-    for col in ["Easting_m", "Northing_m", "Depth_m", "Energy_J"]:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-    n0 = len(df)
-    df = df.dropna()
-    if len(df) < n0:
-        warnings.append(f"Dropped {n0 - len(df)} rows with missing or non-numeric values.")
-    bad = ~df["Mechanism"].isin(VALID_MECHANISMS)
-    if bad.any():
-        warnings.append(f"Dropped {int(bad.sum())} rows with unrecognised Mechanism "
-                        f"(allowed: {VALID_MECHANISMS}).")
-        df = df[~bad]
-    nonpos = df["Energy_J"] <= 0
-    if nonpos.any():
-        warnings.append(f"Dropped {int(nonpos.sum())} rows with non-positive Energy_J.")
-        df = df[~nonpos]
-    if len(df) == 0:
-        return None, "No valid events remain after validation.", warnings
-    return df.reset_index(drop=True), None, warnings
- 
- 
-def generate_synthetic_catalogue(n, regime_cfg, spread, tensile_pct,
-                                 noise_amp, b_true, seed=42):
-    """Synthetic catalogue for demonstration only. Magnitudes follow a
-    Gutenberg-Richter law with b = b_true above SYNTH_MC, so the b-value
-    estimator can be sanity-checked against a known answer."""
-    rng = np.random.default_rng(seed)
-    noise_ratio = noise_amp / 250.0
-    p_shear = np.clip(1.0 - tensile_pct / 100.0 - 0.05 - noise_ratio, 0.01, 1.0)
-    p_closure = np.clip(0.05 + noise_ratio, 0.01, 0.95)
-    p_tensile = np.clip(1.0 - p_shear - p_closure, 0.01, 1.0)
-    p = np.array([p_shear, p_tensile, p_closure])
-    p = p / p.sum()
-    mags = SYNTH_MC + rng.exponential(1.0 / (b_true * np.log(10.0)), n)
-    return pd.DataFrame({
-        "Easting_m": rng.normal(500.0, spread * 4.0, n),
-        "Northing_m": rng.normal(1200.0, spread * 2.0, n),
-        "Depth_m": rng.normal(regime_cfg["base_depth_m"], spread * 3.0, n),  # positive down
-        "Mechanism": rng.choice(VALID_MECHANISMS, size=n, p=p),
-        "Energy_J": magnitude_to_energy(mags),
-    })
- 
- 
-# --------------------------------------------------------------------------
-# Analytics engine
-# --------------------------------------------------------------------------
-class SubsurfaceAnalyticsEngine:
-    def __init__(self, df, regime_cfg):
-        self.data = df
-        self.regime = regime_cfg
- 
-    def apply_filters(self, workings_easting, buffer_m, drop_closure):
-        """(1) Remove events within buffer_m of a planar working at a given
-        Easting (a 1-D approximation; real 3-D distance to mine geometry is
-        future work). (2) Optionally remove events LABELLED 'Closure'."""
-        df = self.data
-        after_buffer = df[(df["Easting_m"] - workings_easting).abs() > buffer_m]
-        after_label = (after_buffer[after_buffer["Mechanism"] != "Closure"]
-                       if drop_closure else after_buffer)
-        info = {"removed_by_buffer": len(df) - len(after_buffer),
-                "removed_by_label": len(after_buffer) - len(after_label)}
-        return after_label.copy(), info
- 
-    def stress_estimate(self, tensile_pct):
-        """Empirical gradient-based ESTIMATE in MPa. This is NOT a stress
-        inversion: it is not derived from focal mechanisms."""
-        depth_m = float(np.median(np.abs(self.data["Depth_m"])))
-        sv = depth_m * 0.023
-        shmin = sv * (0.6 + tensile_pct / 250.0)
-        shmax = shmin * (1.2 + depth_m / 15000.0)
-        total_e = float(self.data["Energy_J"].sum())
-        closure_e = float(self.data.loc[self.data["Mechanism"] == "Closure", "Energy_J"].sum())
-        return {"depth_m": depth_m, "Sv": sv, "Shmin": shmin, "Shmax": shmax,
-                "closure_energy_fraction": closure_e / total_e if total_e > 0 else 0.0}
- 
-    def geomechanics(self, df_clean, fluid_eff, srv_scale):
-        xyz = df_clean[["Easting_m", "Northing_m", "Depth_m"]].to_numpy(dtype=float)
-        hull_vol, hull_ok = 0.0, False
-        if len(xyz) >= 4:
-            try:
-                hull_vol, hull_ok = float(ConvexHull(xyz).volume), True
-            except Exception:  # degenerate geometry (coplanar, collinear, ...)
-                pass
-        total_e = float(df_clean["Energy_J"].sum())
-        tensile_e = float(df_clean.loc[df_clean["Mechanism"] == "Tensile", "Energy_J"].sum())
-        tensile_frac = tensile_e / total_e if total_e > 0 else 0.0
-        mags = energy_to_magnitude(df_clean["Energy_J"].to_numpy())
-        return {
-            "hull_ok": hull_ok,
-            "hull_volume": hull_vol,
-            "srv": hull_vol * srv_scale,
-            # Relative proxy, NOT dimensionless Fcd and NOT in mD-ft.
-            "conductivity_index": tensile_frac * FCD_PROXY_SCALE * (fluid_eff / 50.0),
-            "magnitudes": mags,
-            "b": estimate_b_value(mags),
-        }
- 
-    def forecast(self, conductivity_index, noise, tensile_pct, rate_limit):
-        """PLACEHOLDER decline curve (uncalibrated). Fixed vs original:
-        - SRV no longer steepens the decline,
-        - hyperbolic exponent n >= 0.5 so Arps b = 1/n <= 2,
-        - the rate cutoff handles the 'never reaches the limit' case correctly."""
-        t = np.arange(1, HORIZON_DAYS + 1)
-        qi = float(np.clip(QI_BASE + conductivity_index * QI_PER_FCD, QI_MIN, QI_MAX))
-        di = float(np.clip(0.45 - tensile_pct / 300.0, 0.05, 0.40))   # nominal, per day
-        n = float(np.clip(0.40 + noise / 200.0, 0.5, 0.95))
-        q = qi / (1.0 + di * t) ** n
-        q_water = (t ** self.regime["water_exponent"]) * (q * 0.04)
-        below = np.flatnonzero(q < rate_limit)
-        capped = below.size == 0
-        cutoff = len(t) if capped else int(below[0])
-        return {"timeline": t / 365.25, "rate": q, "water": q_water,
-                "cum_boe": float(q[:cutoff].sum()), "life_years": round(cutoff / 365.25, 2),
-                "horizon_capped": capped, "qi": qi}
- 
- 
-# --------------------------------------------------------------------------
-# Sidebar
-# --------------------------------------------------------------------------
-st.sidebar.header("Reservoir Optimization Console")
-env = st.sidebar.selectbox("Target Depth Envelope", list(REGIMES.keys()))
- 
-st.sidebar.subheader("Data")
-uploaded_file = st.sidebar.file_uploader(
-    "Upload event catalogue (.csv/.txt)", type=["csv", "txt"],
-    help="Required columns: Easting_m, Northing_m, Depth_m, Mechanism "
-         "(Shear/Tensile/Closure), Energy_J (joules). Depth in metres.")
-with st.sidebar.expander("Synthetic data controls (ignored if a file is uploaded)"):
-    count = st.slider("Event count", 50, 1000, 300, 50)
-    noise = st.slider("Rock Mass Anisotropy (spatial spread)", 5, 60, 25, 5)
-    tensile_pct = st.slider("Focal Mechanism Tensile Ratio (%)", 5, 95, 35, 5)
-    noise_sim_amplitude = st.slider("Simulated machinery-noise fraction", 0, 100, 30, 10)
-    b_true = st.slider("True b-value (synthetic truth)", 0.6, 1.6, 1.0, 0.1)
- 
-st.sidebar.subheader("Filters")
-workings_easting = st.sidebar.number_input(
-    "Mine working position: Easting (m)", value=500.0, step=10.0,
-    help="Planar approximation of a mine working at this Easting.")
-spatial_buffer = st.sidebar.slider("Distance buffer around working (m)", 0.0, 50.0, 15.0, 5.0)
-drop_closure = st.sidebar.toggle(
-    "Drop events labelled 'Closure' (label filter only, no waveform analysis)", value=True)
- 
-st.sidebar.subheader("Assumptions")
-proppant_eff = st.sidebar.slider("Fluid proppant carrying efficiency (%)", 10, 100, 75, 5)
-srv_scale = st.sidebar.number_input(
-    "SRV scaling factor (user assumption)", min_value=0.1, max_value=20.0, value=1.0, step=0.1,
-    help="1.0 = raw convex-hull volume of the filtered event cloud.")
-rate_limit = st.sidebar.slider("Economic rate limit (BOE/day)", 5.0, 120.0, 25.0, 5.0)
- 
-# --------------------------------------------------------------------------
-# Load data (no silent fallback to synthetic data)
-# --------------------------------------------------------------------------
-regime_cfg = REGIMES[env]
-if uploaded_file is not None:
-    raw_df, load_error, load_warnings = load_uploaded(uploaded_file)
-    if load_error:
-        st.error(f"Upload failed: {load_error}")
+
+import geoflux_core as core
+import geoflux_mine as mine
+
+st.set_page_config(page_title="GeoFlux: Mine Seismology (prototype)", layout="wide")
+
+
+@st.cache_data(show_spinner=False)
+def demo_data():
+    cat, blasts, workings, _truth = mine.make_synthetic_mine()
+    return cat, blasts, workings
+
+
+def csv_bytes(df):
+    return df.to_csv(index=False).encode("utf-8")
+
+
+# ----------------------------------------------------------------- sidebar: data
+st.sidebar.header("Data")
+cat_file = st.sidebar.file_uploader("Seismic event catalogue (.csv)", type=["csv", "txt"],
+    help="Required: Time, X, Y, Z (mine grid, metres) and Magnitude or Energy_J. "
+         "Optional: Event_Type, Loc_Error_m, Moment_Nm.")
+blast_file = st.sidebar.file_uploader("Blast log (.csv, optional)", type=["csv", "txt"],
+    help="Required: Time. Optional: X, Y, Z, Notes.")
+work_file = st.sidebar.file_uploader("Workings (.csv, optional)", type=["csv", "txt"],
+    help="Columns: Name (optional), X, Y, Z. Rows with the same Name form a 3-D polyline "
+         "in file order. Must use the same coordinate system and Z convention as the catalogue.")
+
+load_notes = []
+if cat_file is not None:
+    cat, err, w = mine.load_catalogue(cat_file)
+    if err:
+        st.error(f"Catalogue upload failed: {err}")
         st.stop()
-    is_synthetic = False
-    source_label = f"UPLOADED FILE: {uploaded_file.name} ({len(raw_df):,} valid events)"
+    load_notes += w
+    blasts, workings = None, None
+    if blast_file is not None:
+        blasts, err, w = mine.load_blast_log(blast_file)
+        if err:
+            st.error(f"Blast log upload failed: {err}")
+            st.stop()
+        load_notes += w
+    if work_file is not None:
+        workings, err, w = mine.load_workings(work_file)
+        if err:
+            st.error(f"Workings upload failed: {err}")
+            st.stop()
+        load_notes += w
+    is_demo = False
+    source = f"UPLOADED: {cat_file.name} ({len(cat):,} events)"
 else:
-    load_warnings = []
-    raw_df = generate_synthetic_catalogue(count, regime_cfg, noise, tensile_pct,
-                                          noise_sim_amplitude, b_true)
-    is_synthetic = True
-    source_label = "SYNTHETIC DEMONSTRATION DATA (randomly generated, not a real site)"
- 
-engine = SubsurfaceAnalyticsEngine(raw_df, regime_cfg)
-df_clean, filter_info = engine.apply_filters(workings_easting, spatial_buffer, drop_closure)
-if len(df_clean) == 0:
-    st.error("All events were removed by the filters. Reduce the buffer or disable the label filter.")
+    cat, blasts, workings = demo_data()
+    is_demo = True
+    source = "SYNTHETIC DEMONSTRATION MINE (randomly generated; not a real site)"
+    if blast_file is not None or work_file is not None:
+        load_notes.append("Blast log / workings are ignored until a catalogue is uploaded.")
+
+with st.sidebar.expander("Download CSV templates"):
+    st.caption("Examples of the expected formats (from the demonstration mine).")
+    st.download_button("Catalogue template", csv_bytes(demo_data()[0].head(200)),
+                       "catalogue_template.csv", "text/csv")
+    st.download_button("Blast log template", csv_bytes(demo_data()[1].head(50)),
+                       "blast_log_template.csv", "text/csv")
+    st.download_button("Workings template", csv_bytes(demo_data()[2]),
+                       "workings_template.csv", "text/csv")
+
+# ------------------------------------------------------------ sidebar: settings
+st.sidebar.header("Blast discrimination")
+blast_window_s = st.sidebar.number_input("Direct blast window after a logged blast (s)", 5, 600, 60)
+post_min = st.sidebar.number_input("Post-blast response window (min)", 1, 240, 30)
+hours_txt = st.sidebar.text_input("Typical blast hours (24 h, comma-separated)",
+                                  value="5.5, 17.5" if is_demo else "",
+                                  help="e.g. 5.5, 17.5 means 05:30 and 17:30. Leave empty if unknown.")
+hour_tol = st.sidebar.number_input("Blast-hour tolerance (min)", 5, 120, 30)
+try:
+    blast_hours = tuple(float(x) for x in hours_txt.replace(";", ",").split(",") if x.strip())
+except ValueError:
+    st.sidebar.error("Blast hours must be numbers, e.g. 5.5, 17.5")
+    blast_hours = ()
+
+cat = cat.copy()
+cat["Class"] = mine.classify_events(cat, blasts, blast_window_s, 5.0, post_min, blast_hours, hour_tol)
+include = st.sidebar.multiselect("Classes included in analysis", mine.ALL_CLASSES,
+                                 default=mine.DEFAULT_INCLUDE,
+                                 help="Post-blast seismicity is real hazard, so it is kept by default.")
+df = cat[cat["Class"].isin(include)].reset_index(drop=True)
+if len(df) < 50:
+    st.error("Fewer than 50 events are included in the analysis. Adjust the filters or the data.")
     st.stop()
- 
-stress = engine.stress_estimate(tensile_pct)
-geo = engine.geomechanics(df_clean, proppant_eff, srv_scale)
-curves = engine.forecast(geo["conductivity_index"], noise, tensile_pct, rate_limit)
- 
-# --------------------------------------------------------------------------
-# Header and status banners
-# --------------------------------------------------------------------------
-st.title("GeoFlux Reservoir Suite")
-st.subheader(f"Prototype analytics core ({env})")
-st.warning("ILLUSTRATIVE PROTOTYPE: outputs are not validated and must not be used "
-           "for safety, reserves, regulatory or investment decisions.")
-if is_synthetic:
-    st.warning(f"DATA SOURCE: {source_label}")
-else:
-    st.info(f"DATA SOURCE: {source_label}")
-for w in load_warnings:
-    st.caption(f"Data note: {w}")
-st.markdown("---")
- 
-b = geo["b"]
-m1, m2, m3, m4, m5 = st.columns(5)
-m1.metric("SRV (hull x scale)", f"{geo['srv']:,.0f} m³")
-m2.metric("Conductivity index (relative)", f"{geo['conductivity_index']:.2f}")
-m3.metric("b-value (Aki ML)",
-          f"{b['b']:.2f} ± {b['sigma']:.2f}" if b else "n/a (too few events)")
-m4.metric("Time above rate limit", f"{curves['life_years']} yr")
-m5.metric("Illustrative 10-yr cumulative", f"{curves['cum_boe']:,.0f} BOE")
-if not geo["hull_ok"]:
-    st.caption("SRV is 0: fewer than 4 events or degenerate geometry (hull could not be computed).")
-if curves["horizon_capped"]:
-    st.caption("The rate never fell below the limit within the 10-year horizon; "
-               "cumulative volume is capped at 10 years.")
-elif curves["life_years"] == 0:
-    st.caption("The rate is below the economic limit from day 1: cumulative volume is zero.")
-if b:
-    msg = f"b-value estimated from {b['n_used']} events above Mc = {b['mc']:.2f}."
-    if is_synthetic:
-        msg += f" Synthetic truth: b = {b_true:.1f} (a quick sanity check of the estimator)."
-    st.caption(msg)
-st.markdown("---")
- 
-# --------------------------------------------------------------------------
-# Channel A: forecast (placeholder)
-# --------------------------------------------------------------------------
-st.markdown("### Channel A: Illustrative decline forecast (placeholder model)")
-st.caption("Not calibrated to any reservoir. No porosity, permeability, pressure or fluid "
-           "properties are used. Treat the shape as a demonstration only.")
-idx = np.round(curves["timeline"], 2)
-c1, c2 = st.columns(2)
-c1.area_chart(pd.DataFrame({"Hydrocarbon rate (BOE/d)": curves["rate"]}, index=idx))
-c2.area_chart(pd.DataFrame({"Produced water (BWPD)": curves["water"]}, index=idx))
-st.markdown("---")
- 
-# --------------------------------------------------------------------------
-# Channel B: seismology scrutiny view
-# --------------------------------------------------------------------------
-st.markdown("### Channel B: Seismicity and filter validation")
-v1, v2, v3 = st.columns(3)
- 
-with v1:
-    st.caption("Frequency-magnitude: log10 of cumulative count N(>=M)")
-    m_raw, m_clean = energy_to_magnitude(raw_df["Energy_J"].to_numpy()), geo["magnitudes"]
-    grid = np.linspace(min(m_raw.min(), m_clean.min()), max(m_raw.max(), m_clean.max()), 25)
- 
-    def cum_log(m):
-        n = np.array([(m >= g).sum() for g in grid], dtype=float)
-        return np.where(n > 0, np.log10(np.maximum(n, 1.0)), np.nan)
- 
-    st.line_chart(pd.DataFrame({"Unfiltered": cum_log(m_raw), "Filtered": cum_log(m_clean)},
-                               index=np.round(grid, 2)))
- 
-with v2:
-    st.caption("Stress ESTIMATE from empirical gradients (MPa). Not an inversion.")
-    st.bar_chart(pd.DataFrame({"MPa": [stress["Sv"], stress["Shmax"], stress["Shmin"]]},
-                              index=["Sv", "SHmax", "Shmin"]))
-    st.caption(f"Computed at median event depth {stress['depth_m']:,.0f} m.")
- 
-with v3:
-    st.caption("Illustrative proppant decay profile (placeholder, not a model)")
-    d_axis = np.linspace(0, 300, 100)
-    st.area_chart(pd.DataFrame(
-        {"Proppant (lb/ft²)": (proppant_eff * 0.1) * np.exp(-d_axis / (100 + geo["conductivity_index"]))},
-        index=np.round(d_axis, 1)))
-st.markdown("---")
- 
-# --------------------------------------------------------------------------
-# Filter audit
-# --------------------------------------------------------------------------
-st.markdown("### Filter audit")
-a1, a2 = st.columns(2)
-with a1:
-    counts = pd.DataFrame({
-        "Raw": [int((raw_df["Mechanism"] == k).sum()) for k in VALID_MECHANISMS],
-        "After filters": [int((df_clean["Mechanism"] == k).sum()) for k in VALID_MECHANISMS],
-    }, index=VALID_MECHANISMS)
-    st.bar_chart(counts)
-with a2:
-    st.write(f"Distance buffer: removed **{filter_info['removed_by_buffer']}** events within "
-             f"{spatial_buffer:g} m of Easting = {workings_easting:g} m (planar approximation).")
-    st.write(f"Label filter ({'ON' if drop_closure else 'OFF'}): removed "
-             f"**{filter_info['removed_by_label']}** events labelled 'Closure'.")
-    st.write(f"Closure share of raw catalogue energy: **{stress['closure_energy_fraction']:.1%}**")
-    st.caption("The label filter trusts the 'Mechanism' column. It performs no waveform "
-               "analysis, and 'Closure' is not the same thing as blasting or machinery noise.")
-st.markdown("---")
- 
-with st.expander("Known limitations of this prototype"):
-    st.markdown(
-        "- No reservoir properties are modelled; the forecast is a placeholder curve.\n"
-        "- SRV is a convex-hull volume (sensitive to outliers; no uncertainty).\n"
-        "- The conductivity index is a relative proxy, not Fcd.\n"
-        "- Stress values are gradient-based estimates, not a focal-mechanism inversion.\n"
-        "- The mine buffer is a planar Easting offset, not 3-D distance to workings.\n"
-        "- No hazard metrics (Mmax, rockburst, ground motion) are computed.\n"
-        "- No economics: no prices, costs, royalties, tax or discounting.")
- 
-st.subheader("Event catalogue (first 20 rows)")
-st.dataframe(raw_df.head(20))
- 
-# --------------------------------------------------------------------------
-# CHANGELOG (Phase 0)
-# - Removed the unconditional "PRO-FORMA REVIEW PASSED" banner.
-# - Data source is always labelled; a failed upload now shows an error instead of
-#   silently switching to synthetic data. Required columns are validated.
-# - Fixed Ultra-Deep substring bug: regimes are looked up by exact key. Ultra-Deep
-#   now actually uses its own depth (5,000 m) and water exponent (0.50).
-# - b-value: Aki ML estimator with Mc (max-curvature + 0.2) and 0.434 factor,
-#   reported with +/- sigma. Removed arbitrary clip and Ultra-Deep x0.85 factor.
-# - Magnitude relation corrected to M = (log10 E - 4.8) / 1.5 (E in joules).
-# - Removed the fake "Error Bound" series from the frequency-magnitude plot.
-# - Synthetic magnitudes now follow Gutenberg-Richter with a known b.
-# - Synthetic depth now follows the selected envelope.
-# - Distance buffer: working Easting is a user input (was hardcoded 500).
-# - Renamed "waveform discriminator" to what it is: a label filter.
-# - SRV: arbitrary x10.5/14.2/18.5 multipliers replaced by a user scaling factor (1.0).
-# - "Fcd (mD-ft)" renamed "Conductivity index (relative)".
-# - Forecast: SRV no longer steepens decline; Arps b capped at 2; cutoff logic fixed
-#   (a well never reaching the limit is capped at 10 yr; one below it on day 1 gets 0).
-# - Stress ellipse plot replaced with an honest Sv/SHmax/Shmin bar chart.
-# - Machinery-noise chart now compares raw vs filtered counts per mechanism.
-# - Removed global np.random.seed; uses a local default_rng.
-# --------------------------------------------------------------------------
- 
+
+st.sidebar.header("Statistics")
+auto_bin = core.detect_mag_bin(df["Magnitude"])
+mag_bin = st.sidebar.selectbox("Magnitude rounding", [0.0, 0.1],
+                               index=1 if auto_bin == 0.1 else 0,
+                               format_func=lambda v: "continuous" if v == 0 else f"rounded to {v}",
+                               help="Auto-detected from the data; override if wrong.")
+mc_auto = core.estimate_mc_maxc(df["Magnitude"], mag_bin)
+if mc_auto is None:
+    st.error("Too few events to estimate the magnitude of completeness.")
+    st.stop()
+mc = (st.sidebar.number_input("Mc override", value=float(mc_auto), step=0.1, format="%.2f")
+      if st.sidebar.checkbox("Override Mc") else mc_auto)
+bwin = st.sidebar.slider("b-value window (events)", 50, 500, 150, 25)
+baseline_days = st.sidebar.slider("Rate baseline (first N days)", 7, 90, 30, 1)
+alpha = st.sidebar.select_slider("Rate-flag significance", [0.05, 0.01, 0.001], value=0.01)
+near_m = st.sidebar.slider("'Near excavation' distance (m)", 5, 200, 30, 5)
+
+st.sidebar.header("Hazard screen")
+recent_days = st.sidebar.slider("Recent-rate window (days)", 3, 60, 14)
+horizon_days = st.sidebar.slider("Look-ahead horizon (days)", 1, 30, 7)
+thr_txt = st.sidebar.text_input("Magnitude thresholds", "0, 1, 2, 3")
+try:
+    thresholds = tuple(float(x) for x in thr_txt.split(",") if x.strip()) or (0.0, 1.0, 2.0)
+except ValueError:
+    st.sidebar.error("Thresholds must be numbers, e.g. 0, 1, 2")
+    thresholds = (0.0, 1.0, 2.0)
+
+# ---------------------------------------------------------------- computations
+if workings is not None:
+    cat["Dist_to_working_m"], cat["Nearest_working"] = mine.distance_to_workings(cat, workings)
+    df = cat[cat["Class"].isin(include)].reset_index(drop=True)
+b_all = core.estimate_b_value(df["Magnitude"], mc, mag_bin)
+if b_all is None:
+    st.error(f"Fewer than 50 events at or above Mc = {mc:.2f}. Lower Mc or add data.")
+    st.stop()
+daily = mine.poisson_rate_flags(mine.daily_table(df, mc), baseline_days, alpha)
+bseries = core.b_value_series(df["Time"], df["Magnitude"], mc, mag_bin, bwin, max(bwin // 5, 10))
+
+# --------------------------------------------------------------------- header
+st.title("GeoFlux: Mine Seismology Module")
+st.warning("PROTOTYPE: not validated. Do not use as the basis for re-entry, support design "
+           "or other safety decisions. Outputs support, and never replace, a qualified "
+           "mine seismologist and your site's seismic risk management plan.")
+(st.warning if is_demo else st.info)(f"DATA SOURCE: {source}")
+for note in load_notes:
+    st.caption(f"Data note: {note}")
+
+tabs = st.tabs(["Data & QC", "Blast discrimination", "Spatial", "b-value & rate",
+                "Hazard screen", "Export"])
+
+# ------------------------------------------------------------------ tab 1: QC
+with tabs[0]:
+    c = st.columns(6)
+    c[0].metric("Events (all)", f"{len(cat):,}")
+    c[1].metric("In analysis", f"{len(df):,}")
+    c[2].metric("Span", f"{(cat['Time'].max() - cat['Time'].min()).days} days")
+    c[3].metric("Mc", f"{mc:.2f}")
+    c[4].metric("b (all included)", f"{b_all['b']:.2f} +/- {b_all['sigma']:.2f}")
+    c[5].metric("Median loc. error",
+                f"{cat['Loc_Error_m'].median():.0f} m" if "Loc_Error_m" in cat else "n/a")
+    st.caption(f"b-value from {b_all['n']:,} events at or above Mc = {mc:.2f} "
+               f"(Aki maximum likelihood; magnitudes {'continuous' if mag_bin == 0 else f'rounded to {mag_bin}'}).")
+
+    mc_month = (df.groupby(df["Time"].dt.to_period("M"))["Magnitude"]
+                .apply(lambda m: core.estimate_mc_maxc(m, mag_bin) if len(m) >= 50 else np.nan))
+    mc_month = mc_month.rename("Mc").reset_index()
+    mc_month["Time"] = mc_month["Time"].astype(str)
+    q1, q2 = st.columns(2)
+    with q1:
+        st.markdown("**Completeness magnitude by month**")
+        if mc_month["Mc"].notna().sum() >= 2:
+            st.altair_chart(alt.Chart(mc_month).mark_line(point=True).encode(
+                x=alt.X("Time:N", title="Month"), y=alt.Y("Mc:Q", scale=alt.Scale(zero=False))
+            ).properties(width="container", height=240))
+            spread = float(mc_month["Mc"].max() - mc_month["Mc"].min())
+            if spread > 0.3:
+                st.warning(f"Mc varies by {spread:.1f} magnitude units across months: catalogue "
+                           "completeness is changing, so rate and b-value trends may be artefacts "
+                           "of network changes.")
+        else:
+            st.caption("Not enough events per month to estimate Mc by month.")
+    with q2:
+        st.markdown("**Events by hour of day (all events)**")
+        hod = cat["Time"].dt.hour.value_counts().reindex(range(24), fill_value=0)
+        st.altair_chart(alt.Chart(hod.rename("Events").rename_axis("Hour").reset_index())
+                        .mark_bar().encode(x=alt.X("Hour:O"), y="Events:Q")
+                        .properties(width="container", height=240))
+        st.caption("Sharp peaks at fixed hours usually mean blasting. Compare with your blast log.")
+    if "Loc_Error_m" in cat:
+        poor = float((cat["Loc_Error_m"] > 50).mean())
+        if poor > 0.1:
+            st.warning(f"{poor:.0%} of events have location error above 50 m: distance-to-working "
+                       "results will be unreliable for those events.")
+
+# -------------------------------------------------- tab 2: blast discrimination
+with tabs[1]:
+    st.markdown("**How events were classified**")
+    counts = cat["Class"].value_counts().reindex(mine.ALL_CLASSES, fill_value=0)
+    st.dataframe(pd.DataFrame({"Events": counts, "In analysis": [k in include for k in counts.index]}))
+    daily_cls = (cat.assign(Date=cat["Time"].dt.floor("D")).groupby(["Date", "Class"]).size()
+                 .rename("Events").reset_index())
+    st.altair_chart(alt.Chart(daily_cls).mark_bar().encode(
+        x="Date:T", y="Events:Q", color="Class:N").properties(width="container", height=260))
+    if blasts is None:
+        st.info("No blast log supplied: only hour-of-day flags (and any Event_Type column) are used.")
+    with st.expander("What this does and does not do"):
+        st.markdown(
+            "- Uses **timestamps only**: a logged-blast window, a post-blast window, and typical blast "
+            "hours. It performs **no waveform analysis**.\n"
+            "- Genuine seismicity falling inside a blast window is labelled as blast and cannot be "
+            "separated without waveform features.\n"
+            "- **Post-blast seismicity is kept** in the analysis by default: it is real rock-mass "
+            "response, and removing it would hide hazard.\n"
+            "- **Blast-hour (unconfirmed)** events are only flagged by time of day; many are genuine.\n"
+            "- Accuracy depends on clock synchronisation between the seismic system and the blast log.")
+
+# ------------------------------------------------------------------ tab 3: spatial
+with tabs[2]:
+    options = ["Class", "Magnitude"] + (["Distance to working (m)"] if workings is not None else [])
+    color_by = st.radio("Colour events by", options, horizontal=True)
+    plot = df if len(df) <= 20000 else df.sample(20000, random_state=0)
+    if len(df) > 20000:
+        st.caption("Showing a random sample of 20,000 events.")
+    plot = plot.rename(columns={"Dist_to_working_m": "Distance to working (m)"})
+    enc = {"Class": alt.Color("Class:N"), "Magnitude": alt.Color("Magnitude:Q", scale=alt.Scale(scheme="viridis")),
+           "Distance to working (m)": alt.Color("Distance to working (m):Q", scale=alt.Scale(scheme="plasma"))}[color_by]
+
+    def view(xf, yf, title):
+        pts = alt.Chart(plot).mark_circle(size=22, opacity=0.6).encode(
+            x=alt.X(f"{xf}:Q", scale=alt.Scale(zero=False)), y=alt.Y(f"{yf}:Q", scale=alt.Scale(zero=False)),
+            color=enc, tooltip=["Time:T", "Magnitude:Q", "Class:N"])
+        layers = [pts]
+        if workings is not None:
+            layers.append(alt.Chart(workings).mark_line(color="black", strokeWidth=2).encode(
+                x=f"{xf}:Q", y=f"{yf}:Q", detail="Name:N"))
+        return alt.layer(*layers).properties(title=title, width="container", height=360)
+
+    s1, s2 = st.columns(2)
+    s1.altair_chart(view("X", "Y", "Plan view (X-Y)"))
+    s2.altair_chart(view("X", "Z", "Section view (X-Z)"))
+    st.caption("Black lines are the supplied workings. Axes are not forced to equal scale.")
+    if workings is not None:
+        near = df[df["Dist_to_working_m"] <= near_m]
+        st.write(f"**{len(near):,}** of {len(df):,} analysed events ({len(near) / len(df):.0%}) lie within "
+                 f"{near_m} m of a working.")
+        if len(near):
+            top = near["Nearest_working"].value_counts().rename("Events near working").to_frame()
+            st.dataframe(top)
+
+# --------------------------------------------------------- tab 4: b-value & rate
+with tabs[3]:
+    st.markdown("**Moving b-value (fixed number of events per window)**")
+    if len(bseries):
+        band = bseries.assign(lo=bseries["b"] - bseries["sigma"], hi=bseries["b"] + bseries["sigma"])
+        base = alt.Chart(band).encode(x="Time:T")
+        st.altair_chart((base.mark_area(opacity=0.25).encode(
+            y=alt.Y("lo:Q", title="b-value", scale=alt.Scale(zero=False)), y2="hi:Q")
+            + base.mark_line().encode(y="b:Q")).properties(width="container", height=260))
+        st.caption(f"Windows of {bwin} events above Mc = {mc:.2f}; band is +/-1 sigma (Aki). "
+                   "A falling b-value is a possible indicator of rising stress, not a prediction.")
+    else:
+        st.info("Not enough events for the chosen window; reduce the window size.")
+    if workings is not None:
+        n_ev, f_ev = df[df["Dist_to_working_m"] <= near_m], df[df["Dist_to_working_m"] > near_m]
+        bn = core.estimate_b_value(n_ev["Magnitude"], mc, mag_bin)
+        bf = core.estimate_b_value(f_ev["Magnitude"], mc, mag_bin)
+        k1, k2 = st.columns(2)
+        k1.metric(f"b within {near_m} m of workings", f"{bn['b']:.2f} +/- {bn['sigma']:.2f}" if bn else "n/a (too few)")
+        k2.metric("b elsewhere", f"{bf['b']:.2f} +/- {bf['sigma']:.2f}" if bf else "n/a (too few)")
+
+    st.markdown("**Daily event rate (events at or above Mc)**")
+    rate_chart = alt.Chart(daily).mark_bar().encode(
+        x="Date:T", y=alt.Y("Count:Q", title="Events per day"),
+        color=alt.condition("datum.Flag", alt.value("#d62728"), alt.value("#7f7f7f")),
+        tooltip=["Date:T", "Count:Q", alt.Tooltip("p_value:Q", format=".4f")])
+    st.altair_chart(rate_chart.properties(width="container", height=260))
+    nflag = int(daily["Flag"].sum())
+    st.caption(f"Baseline rate {daily['Baseline_rate'].iloc[0]:.1f} events/day from the first "
+               f"{baseline_days} days. {nflag} day(s) flagged (red) at p < {alpha}. Seismicity is clustered, "
+               "so some flags will be false alarms; a flag means 'review this day', not 'hazard'.")
+    if "Energy_J" in daily:
+        cum = daily.assign(Cumulative_energy_J=daily["Energy_J"].cumsum())
+        st.markdown("**Cumulative radiated energy (J)**")
+        st.altair_chart(alt.Chart(cum).mark_line().encode(
+            x="Date:T", y=alt.Y("Cumulative_energy_J:Q", title="Joules", scale=alt.Scale(type="log"))
+        ).properties(width="container", height=220))
+
+# ------------------------------------------------------------- tab 5: hazard
+with tabs[4]:
+    tab, ctx = mine.hazard_screen(df, mc, b_all, recent_days, horizon_days, thresholds)
+    h = st.columns(3)
+    h[0].metric(f"Events at or above Mc, last {recent_days} d", f"{ctx['recent_events']}")
+    h[1].metric("Recent rate", f"{ctx['rate_per_day']:.1f} / day")
+    h[2].metric("Largest event in catalogue", f"M {ctx['largest']:.1f}")
+    shown = tab.copy()
+    for col in ["P(>= threshold)", "Low", "High"]:
+        shown[col] = (shown[col] * 100).round(1).astype(str) + " %"
+    shown.insert(0, "Window", f"next {horizon_days} d")
+    st.dataframe(shown, hide_index=True)
+    st.warning("Statistical screening only. Assumes a stationary Poisson process with a "
+               "Gutenberg-Richter magnitude law. Clustering (aftershocks, swarms, blast response) breaks "
+               "the Poisson assumption and can make true probability higher than shown. Low/High use "
+               "rate +/- sqrt(N) and b -/+ sigma and are not confidence intervals. This is not a rockburst forecast.")
+    st.caption("Not included: ground motion, support capacity, fault and geology, stress modelling, "
+               "or event location uncertainty.")
+
+# ------------------------------------------------------------------ tab 6: export
+with tabs[5]:
+    export = cat.copy()
+    export["In_analysis"] = export["Class"].isin(include)
+    st.download_button("Download classified catalogue (CSV)", csv_bytes(export),
+                       "classified_catalogue.csv", "text/csv")
+    st.download_button("Download daily rate table (CSV)", csv_bytes(daily),
+                       "daily_rates.csv", "text/csv")
+    st.dataframe(export.head(20))
