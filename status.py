@@ -11,9 +11,10 @@ for name in ["geoflux_frac", "geoflux_io", "geoflux_dca", "geoflux_demo", "tabs_
              "geoflux_models", "geoflux_backtest", "geoflux_agg", "geoflux_runs", "tabs_models",
              "geoflux_econ", "geoflux_risk", "tabs_econ", "geoflux_wells", "geoflux_typecurve",
              "geoflux_port", "tabs_tc", "tabs_tc2", "tabs_port",
-             "geoflux_pvt", "geoflux_vol", "geoflux_mb", "geoflux_mbdata", "tabs_conv", "tabs_conv2"]:
+             "geoflux_pvt", "geoflux_vol", "geoflux_mb", "geoflux_mbdata", "tabs_conv", "tabs_conv2",
+             "geoflux_rta", "geoflux_rtadata", "tabs_rta"]:
     EXPECT[name + ".py"] = END + name + ".py"
-for name in ["1_Oil_and_Gas", "2_Decline_Models", "3_Economics_Risk", "4_Type_Curves", "5_Portfolio", "6_Conventional"]:
+for name in ["1_Oil_and_Gas", "2_Decline_Models", "3_Economics_Risk", "4_Type_Curves", "5_Portfolio", "6_Conventional", "7_RTA"]:
     EXPECT[os.path.join("pages", name + ".py")] = END + name + ".py"
 
 bad = 0
